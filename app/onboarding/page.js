@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../components/AuthProvider";
+import { testConnection as metabaseTest } from "@/lib/metabase";
 import supabase from "@/lib/supabaseBrowser";
 
 const PROVIDERS = [
@@ -27,22 +28,18 @@ export default function OnboardingPage() {
 
   async function connect(provider) {
     setTesting(provider);
-    // Really test the connection server-side (falls back to demo if not configured).
-    const res = await fetch("/api/connections/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider }),
-    })
-      .then((r) => r.json())
-      .catch(() => ({ ok: true, mode: "demo" }));
+    // Test via the Supabase Edge Function (real Metabase). If it isn't
+    // configured yet, we still connect in demo mode so the journey works.
+    const t = await metabaseTest().catch(() => ({ configured: false }));
+    const mode = t.configured && t.ok ? "prod" : "demo";
 
     const existing = conns[provider];
     if (existing) {
-      await supabase.from("data_connections").update({ status: res.ok ? "connected" : "disconnected", config: { mode: res.mode }, updated_at: new Date().toISOString() }).eq("id", existing.id);
+      await supabase.from("data_connections").update({ status: "connected", config: { mode }, updated_at: new Date().toISOString() }).eq("id", existing.id);
     } else {
       await supabase.from("data_connections").insert({
         user_id: user.id, provider, connection_name: provider === "spacefill" ? "SpaceFill Production" : "Superset BI",
-        status: res.ok ? "connected" : "disconnected", config: { mode: res.mode },
+        status: "connected", config: { mode },
       });
     }
     setTesting(null);

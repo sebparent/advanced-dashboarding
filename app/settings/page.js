@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../components/AuthProvider";
+import { testConnection as metabaseTest } from "@/lib/metabase";
 import supabase from "@/lib/supabaseBrowser";
 
 const PROVIDERS = [
@@ -27,16 +28,12 @@ export default function SettingsPage() {
 
   async function test(provider) {
     setBusy(provider + "-test");
-    const res = await fetch("/api/connections/test", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ provider }),
-    })
-      .then((r) => r.json())
-      .catch(() => ({ ok: true, mode: "demo" }));
+    // Test via the Supabase Edge Function (real Metabase); demo if not configured.
+    const t = await metabaseTest().catch(() => ({ configured: false }));
+    const mode = t.configured && t.ok ? "prod" : "demo";
     const c = conns[provider];
-    if (c) await supabase.from("data_connections").update({ status: res.ok ? "connected" : "disconnected", config: { mode: res.mode }, updated_at: new Date().toISOString() }).eq("id", c.id);
-    else await supabase.from("data_connections").insert({ user_id: user.id, provider, connection_name: provider, status: res.ok ? "connected" : "disconnected", config: { mode: res.mode } });
+    if (c) await supabase.from("data_connections").update({ status: "connected", config: { mode }, updated_at: new Date().toISOString() }).eq("id", c.id);
+    else await supabase.from("data_connections").insert({ user_id: user.id, provider, connection_name: provider, status: "connected", config: { mode } });
     setBusy(null); load();
   }
 

@@ -6,6 +6,8 @@ import AppShell from "../components/AppShell";
 import { KpiCards, ChartCard, DataTable } from "../components/Charts";
 import { useAuth } from "../components/AuthProvider";
 import { GEN_STEPS } from "@/lib/genEngine";
+import { generate as metabaseGenerate } from "@/lib/metabase";
+import { buildResultSQL } from "@/lib/shape";
 import supabase from "@/lib/supabaseBrowser";
 
 const EXAMPLES = [
@@ -35,13 +37,25 @@ export default function GeneratePage() {
     setStepIdx(0);
 
     // Kick off the real work and the step animation together.
-    const work = fetch("/api/generate", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ prompt: p }),
-    })
-      .then((r) => r.json())
-      .catch(() => null);
+    // Try the real path (Supabase Edge Function → Claude → Metabase) first;
+    // fall back to the demo route if it isn't configured yet.
+    const work = (async () => {
+      try {
+        const r = await metabaseGenerate(p);
+        if (r && r.configured !== false && !r.error && Array.isArray(r.rows)) {
+          return buildResultSQL(r.spec, r.rows, "Metabase");
+        }
+      } catch {
+        /* fall through to demo */
+      }
+      return fetch("/api/generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt: p }),
+      })
+        .then((r) => r.json())
+        .catch(() => null);
+    })();
 
     let i = 0;
     const timer = setInterval(async () => {

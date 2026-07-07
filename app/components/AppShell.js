@@ -9,6 +9,7 @@ import supabase from "@/lib/supabaseBrowser";
 const NAV = [
   { href: "/generate", label: "Créer un dashboard", ico: "✨" },
   { href: "/dashboards", label: "Mes dashboards", ico: "📊" },
+  { href: "/clone", label: "Clone ChatGPT", ico: "💬" },
   { href: "/onboarding", label: "Mes connexions", ico: "🔌" },
   { href: "/settings", label: "Paramètres", ico: "⚙️" },
 ];

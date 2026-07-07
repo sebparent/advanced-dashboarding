@@ -9,7 +9,7 @@ import supabase from "@/lib/supabaseBrowser";
 const NAV = [
   { href: "/generate", label: "Créer un dashboard", ico: "✨" },
   { href: "/dashboards", label: "Mes dashboards", ico: "📊" },
-  { href: "/onboarding", label: "Mes connexions", ico: "🔌" },
+  { href: "/onboarding", label: "État de la connexion", ico: "🔌" },
   { href: "/settings", label: "Paramètres", ico: "⚙️" },
 ];
 

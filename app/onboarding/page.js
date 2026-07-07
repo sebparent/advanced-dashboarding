@@ -5,80 +5,56 @@ import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
 import { useAuth } from "../components/AuthProvider";
 import { testConnection as metabaseTest } from "@/lib/metabase";
-import supabase from "@/lib/supabaseBrowser";
-
-const PROVIDERS = [
-  { key: "spacefill", name: "SpaceFill", ico: "🚀", desc: "Source des commandes et de la logistique." },
-  { key: "superset", name: "Superset", ico: "📊", desc: "Exploration et visualisation des données." },
-];
 
 export default function OnboardingPage() {
   const { user } = useAuth();
   const router = useRouter();
-  const [conns, setConns] = useState({});
-  const [testing, setTesting] = useState(null);
+  const [status, setStatus] = useState("checking"); // checking | ok | off
+  const [testing, setTesting] = useState(false);
 
-  async function load() {
-    const { data } = await supabase.from("data_connections").select("*");
-    const map = {};
-    (data || []).forEach((c) => { map[c.provider] = c; });
-    setConns(map);
+  async function check() {
+    const t = await metabaseTest().catch(() => ({ ok: false }));
+    setStatus(t.ok ? "ok" : "off");
   }
-  useEffect(() => { if (user) load(); }, [user]);
-
-  async function connect(provider) {
-    setTesting(provider);
-    // Test via the Supabase Edge Function (real Metabase). If it isn't
-    // configured yet, we still connect in demo mode so the journey works.
-    const t = await metabaseTest().catch(() => ({ configured: false }));
-    const mode = t.configured && t.ok ? "prod" : "demo";
-
-    const existing = conns[provider];
-    if (existing) {
-      await supabase.from("data_connections").update({ status: "connected", config: { mode }, updated_at: new Date().toISOString() }).eq("id", existing.id);
-    } else {
-      await supabase.from("data_connections").insert({
-        user_id: user.id, provider, connection_name: provider === "spacefill" ? "SpaceFill Production" : "Superset BI",
-        status: "connected", config: { mode },
-      });
-    }
-    setTesting(null);
-    load();
+  async function testNow() {
+    setTesting(true);
+    await check();
+    setTesting(false);
   }
+  // eslint-disable-next-line react-hooks/set-state-in-effect
+  useEffect(() => { if (user) check(); }, [user]);
 
-  const allConnected = PROVIDERS.every((p) => conns[p.key]?.status === "connected");
+  const connected = status === "ok";
 
   return (
-    <AppShell title="Mes connexions" subtitle="Connectez vos sources de données pour générer des dashboards.">
+    <AppShell title="État de la connexion" subtitle="Vérifiez que la source de données est bien accessible.">
       <div style={{ maxWidth: 680 }}>
-        {PROVIDERS.map((p, i) => {
-          const c = conns[p.key];
-          const connected = c?.status === "connected";
-          return (
-            <div className="connector" key={p.key}>
-              <div className="c-ico">{p.ico}</div>
-              <div className="c-body">
-                <div className="t">Étape {i + 1} · {p.name}</div>
-                <div className="d">{p.desc}</div>
-              </div>
-              <span className={`status-badge ${connected ? "ok" : "off"}`}>{connected ? "Connecté" : "Non connecté"}</span>
-              <button className="btn btn-ghost btn-sm" onClick={() => connect(p.key)} disabled={testing === p.key}>
-                {testing === p.key ? "Test…" : connected ? "Tester" : "Connecter"}
-              </button>
-            </div>
-          );
-        })}
+        <div className="connector">
+          <div className="c-ico">📊</div>
+          <div className="c-body">
+            <div className="t">Metabase</div>
+            <div className="d">Source des données (commandes, stocks, entrepôts…). Rien à configurer : c&apos;est déjà branché en toute sécurité.</div>
+          </div>
+          <span className={`status-badge ${connected ? "ok" : "off"}`}>
+            {status === "checking" ? "Vérification…" : connected ? "Connecté" : "Hors ligne"}
+          </span>
+          <button className="btn btn-ghost btn-sm" onClick={testNow} disabled={testing}>
+            {testing ? "Test…" : "Tester la connexion"}
+          </button>
+        </div>
 
         <div className="card mt-24" style={{ background: "var(--light-green)", border: "none" }}>
           <div className="row-between">
             <div>
-              <h3 style={{ margin: 0 }}>{allConnected ? "Tout est prêt 🎉" : "Connectez vos sources"}</h3>
+              <h3 style={{ margin: 0 }}>{connected ? "Tout est prêt 🎉" : "Connexion à vérifier"}</h3>
               <p className="desc" style={{ margin: "4px 0 0" }}>
-                {allConnected ? "Vous pouvez créer votre premier dashboard." : "Connectez SpaceFill et Superset pour continuer."}
+                {connected
+                  ? "Vous pouvez créer votre premier dashboard."
+                  : "La source ne répond pas pour le moment. Réessayez le test, ou contactez l'équipe si ça persiste."}
               </p>
             </div>
             <button className="btn btn-primary" onClick={() => router.push("/generate")}>
-              Continuer vers la création →
+              Créer un dashboard →
             </button>
           </div>
         </div>

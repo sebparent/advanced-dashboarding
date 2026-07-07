@@ -9,29 +9,59 @@ const PIE_COLORS = ["#1BD292", "#06A77D", "#D2F000", "#ABEDD6", "#2D3142", "#C5F
 
 const MONTHS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
 
-const isoDate = (v) => (typeof v === "string" ? v.match(/^(\d{4})-(\d{2})-(\d{2})T/) : null);
-const fmtDay = (m) => `${m[3]}/${m[2]}/${m[1]}`;
-const fmtMonth = (m) => `${MONTHS_FR[Number(m[2]) - 1]} ${m[1]}`;
+// Parse the date forms we may receive: full timestamp, plain date, or a
+// year-month bucket like "2026-04". Returns { y, m, d } with d = null for
+// year-month.
+function parseDate(v) {
+  if (typeof v !== "string") return null;
+  let m = v.match(/^(\d{4})-(\d{2})-(\d{2})(?:T|$)/);
+  if (m) return { y: m[1], m: m[2], d: m[3] };
+  m = v.match(/^(\d{4})-(\d{2})$/);
+  if (m) return { y: m[1], m: m[2], d: null };
+  return null;
+}
+const fmtDay = (p) => (p.d ? `${p.d}/${p.m}/${p.y}` : `${p.m}/${p.y}`);
+const fmtMonth = (p) => `${MONTHS_FR[Number(p.m) - 1]} ${p.y}`;
 
-// Column-aware date formatter: only render "Mai 2026" when EVERY date in the
-// column is a first-of-month (i.e. real monthly buckets). Otherwise use
-// DD/MM/YYYY — so weekly dates that land on the 1st aren't mislabelled.
+function weekdayOf(p) { return new Date(Date.UTC(+p.y, +p.m - 1, +p.d)).getUTCDay(); }
+// ISO 8601 week number.
+function isoWeek(p) {
+  const date = new Date(Date.UTC(+p.y, +p.m - 1, +p.d));
+  const day = (date.getUTCDay() + 6) % 7;
+  date.setUTCDate(date.getUTCDate() - day + 3);
+  const firstThu = new Date(Date.UTC(date.getUTCFullYear(), 0, 4));
+  const fday = (firstThu.getUTCDay() + 6) % 7;
+  firstThu.setUTCDate(firstThu.getUTCDate() - fday + 3);
+  return 1 + Math.round((date - firstThu) / (7 * 864e5));
+}
+
+// Column-aware date formatter:
+//  - all month buckets → "Avril 2026"
+//  - all on the same weekday (weekly buckets) → "06/07/2026 (S28)"
+//  - otherwise → "06/07/2026"
 function columnFormatter(values) {
-  const parsed = values.map(isoDate);
-  const dates = parsed.filter(Boolean);
   const nonEmpty = values.filter((v) => v !== null && v !== undefined && v !== "");
+  const parsed = nonEmpty.map(parseDate);
+  const dates = parsed.filter(Boolean);
   if (dates.length && dates.length === nonEmpty.length) {
-    const monthly = dates.every((m) => m[3] === "01");
-    const fmt = monthly ? fmtMonth : fmtDay;
-    return (v) => { const m = isoDate(v); return m ? fmt(m) : v; };
+    if (dates.every((p) => p.d === null || p.d === "01")) {
+      return (v) => { const p = parseDate(v); return p ? fmtMonth(p) : v; };
+    }
+    const withDay = dates.filter((p) => p.d);
+    const weekly = withDay.length > 1 && new Set(withDay.map(weekdayOf)).size === 1;
+    return (v) => {
+      const p = parseDate(v);
+      if (!p) return v;
+      return weekly && p.d ? `${fmtDay(p)} (S${isoWeek(p)})` : fmtDay(p);
+    };
   }
   return (v) => v;
 }
 
 // Single value fallback (KPI cards): plain date, no month heuristic.
 function fmtVal(v) {
-  const m = isoDate(v);
-  return m ? fmtDay(m) : v;
+  const p = parseDate(v);
+  return p ? fmtDay(p) : v;
 }
 
 export function BarChart({ data, labelKey, valueKey }) {

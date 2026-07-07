@@ -157,11 +157,15 @@ export function PieChart({ data, innerR = 38 }) {
   );
 }
 
-// "nombre_de_commandes" → "Nombre de commandes"
+// "nombre_de_commandes" → "Nombre de commandes" ; "stock_wms_uv" → "Stock WMS UV"
+const ACRONYMS = new Set(["wms", "uv", "uc", "um", "ean", "sscc", "id"]);
 export function prettyCol(c) {
   if (typeof c !== "string") return c;
-  const s = c.replace(/_/g, " ").trim();
-  return s.charAt(0).toUpperCase() + s.slice(1);
+  const words = c.replace(/_/g, " ").trim().split(/\s+/).map((w) =>
+    ACRONYMS.has(w.toLowerCase()) ? w.toUpperCase() : w
+  );
+  if (words[0]) words[0] = words[0].charAt(0).toUpperCase() + words[0].slice(1);
+  return words.join(" ");
 }
 
 export function DataTable({ columns, rows }) {

@@ -1,20 +1,19 @@
-// ─────────────────────────────────────────────────────────────────────────
 // Supabase Edge Function: metabase-query
 //
-// Does EVERYTHING server-side inside Supabase so the app holds no secret:
-//   prompt → Claude (SQL spec) → Metabase (read-only SQL on `analytics`) → rows
+// Does everything server-side so the app holds no secret:
+//   prompt -> Claude (SQL) -> Metabase (read-only SQL on `analytics`) -> rows
 //
-// Auth: verify_jwt is ON at the gateway; we additionally require an
-// authenticated (non-anon) Supabase user. The app calls this with the logged-in
-// user's session token (supabase.functions.invoke attaches it automatically).
+// Multi-tenant safety: every query is scoped to a single client (customer_id).
+// - internal users (@spacefill.fr) may pick any client (customerId in body).
+// - client users are locked to their profile.customer_id (body is ignored).
+// The customer_id filter is ENFORCED here (placeholder {{CUSTOMER_ID}} that the
+// model must include, then substituted with a validated value) so the LLM can
+// never widen the scope.
 //
-// Secrets to set in Supabase (Edge Functions → Secrets):
-//   METABASE_URL          e.g. https://metabase.spacefill.fr
-//   METABASE_API_KEY      mb_... (read-only group on analytics)
-//   ANTHROPIC_API_KEY     sk-ant-...
-//   METABASE_DATABASE_ID  (optional) numeric id; auto-discovered if absent
-//   METABASE_SCHEMA       (optional) defaults to "analytics"
-// ─────────────────────────────────────────────────────────────────────────
+// Secrets (Edge Functions -> Secrets):
+//   METABASE_URL, METABASE_API_KEY, ANTHROPIC_API_KEY,
+//   METABASE_DATABASE_ID (set to 2 = prod analytics), METABASE_SCHEMA (analytics)
+// SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are provided automatically.
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 
@@ -23,6 +22,8 @@ const API_KEY = Deno.env.get("METABASE_API_KEY");
 const ANTHROPIC_KEY = Deno.env.get("ANTHROPIC_API_KEY");
 const DATABASE_ID = Deno.env.get("METABASE_DATABASE_ID");
 const SCHEMA = Deno.env.get("METABASE_SCHEMA") || "analytics";
+const SB_URL = Deno.env.get("SUPABASE_URL");
+const SB_SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
 const json = (body: unknown, status = 200) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -36,42 +37,42 @@ function base(path: string) {
 
 function assertReadOnly(sql: string) {
   const clean = String(sql || "").trim().replace(/;+\s*$/, "");
-  if (!/^(\s*with\b|\s*select\b)/i.test(clean)) throw new Error("Seules les requêtes SELECT sont autorisées");
-  if (/;/.test(clean)) throw new Error("Une seule requête est autorisée");
+  if (!/^(\s*with\b|\s*select\b)/i.test(clean)) throw new Error("Seules les requetes SELECT sont autorisees");
+  if (/;/.test(clean)) throw new Error("Une seule requete est autorisee");
   if (/\b(insert|update|delete|drop|alter|create|truncate|grant|revoke|comment|merge)\b/i.test(clean)) {
-    throw new Error("Mot-clé de modification interdit");
+    throw new Error("Mot-cle de modification interdit");
   }
   return clean;
 }
 
-async function resolveDatabaseId(): Promise<number> {
+async function dbId(body: any): Promise<number> {
+  if (body?.databaseId) return Number(body.databaseId);
   if (DATABASE_ID) return Number(DATABASE_ID);
   const res = await fetch(base("/api/database"), { headers: mbHeaders() });
-  if (!res.ok) throw new Error(`Liste des bases a échoué (${res.status})`);
   const data = await res.json();
   const list = data.data || data;
-  if (!list.length) throw new Error("Aucune base accessible dans Metabase");
+  if (!list?.length) throw new Error("Aucune base accessible dans Metabase");
   return list[0].id;
 }
 
-async function listTables(dbId: number) {
-  const res = await fetch(base(`/api/database/${dbId}/metadata?include_hidden=false`), { headers: mbHeaders() });
-  if (!res.ok) throw new Error(`Métadonnées ont échoué (${res.status})`);
+async function listTables(id: number) {
+  const res = await fetch(base(`/api/database/${id}/metadata?include_hidden=false`), { headers: mbHeaders() });
+  if (!res.ok) throw new Error(`Metadonnees ont echoue (${res.status})`);
   const data = await res.json();
   return (data.tables || [])
     .filter((t: any) => !SCHEMA || (t.schema || "").toLowerCase() === SCHEMA.toLowerCase())
-    .map((t: any) => ({ name: t.name, schema: t.schema, columns: (t.fields || []).map((f: any) => f.name) }));
+    .map((t: any) => ({ name: t.name, columns: (t.fields || []).map((f: any) => f.name) }));
 }
 
-async function runSql(sql: string, dbId: number) {
+async function runSql(sql: string, id: number) {
   const res = await fetch(base("/api/dataset"), {
     method: "POST",
     headers: mbHeaders(),
-    body: JSON.stringify({ database: dbId, type: "native", native: { query: sql } }),
+    body: JSON.stringify({ database: id, type: "native", native: { query: sql } }),
   });
-  if (!res.ok) throw new Error(`Exécution SQL a échoué (${res.status})`);
+  if (!res.ok) throw new Error(`Execution SQL a echoue (${res.status})`);
   const data = await res.json();
-  if (data.status === "failed") throw new Error(data.error || "Requête refusée par Metabase");
+  if (data.status === "failed") throw new Error(data.error || "Requete refusee par Metabase");
   const rows = data.data?.rows || [];
   const cols = (data.data?.cols || []).map((c: any) => c.display_name || c.name);
   return rows.map((row: any[]) => {
@@ -81,69 +82,86 @@ async function runSql(sql: string, dbId: number) {
   });
 }
 
-// ── Claude: prompt → structured SQL spec (tool-use for robust JSON) ──
 const SPEC_SCHEMA = {
   type: "object",
   properties: {
-    title: { type: "string", description: "Titre clair du dashboard, en français" },
-    intent: { type: "string", description: "Résumé en une phrase de l'objectif" },
+    title: { type: "string" },
+    intent: { type: "string" },
     chart_type: { type: "string", enum: ["bar", "line", "area", "pie", "table"] },
-    sql: { type: "string", description: "UNE seule requête SELECT lecture seule, tables préfixées par le schéma, agrégée, LIMIT 1000" },
-    label_column: { type: "string", description: "Colonne étiquette (dimension) dans le résultat" },
-    value_column: { type: "string", description: "Colonne valeur (mesure) dans le résultat" },
+    sql: { type: "string" },
+    label_column: { type: "string" },
+    value_column: { type: "string" },
   },
   required: ["title", "intent", "chart_type", "sql", "label_column", "value_column"],
 };
 
 async function interpret(prompt: string, tables: any[]) {
-  const catalog = tables.map((t) => `- ${t.schema || SCHEMA}.${t.name}: ${(t.columns || []).join(", ")}`).join("\n");
-  const system = `Tu traduis une demande en français en une requête SQL de LECTURE SEULE pour un entrepôt interrogé via Metabase.
-Règles STRICTES : UNE seule requête SELECT (ou WITH ... SELECT), jamais d'écriture ni de point-virgule ; uniquement des tables/colonnes existantes préfixées par le schéma (ex: ${SCHEMA}.orders) ; agrège avec GROUP BY, alias clairs, termine par LIMIT 1000. Choisis le graphique adapté (barres=comparer, courbe/aires=évolution, camembert=parts, tableau=détail). label_column et value_column = alias exacts renvoyés.
-Tables disponibles (schéma ${SCHEMA}):
-${catalog}`;
+  const catalog = tables.map((t) => `- ${SCHEMA}.${t.name}: ${(t.columns || []).join(", ")}`).join("\n");
+  const system = "Tu traduis une demande en francais en une requete SQL de LECTURE SEULE pour un entrepot interroge via Metabase (Postgres).\n" +
+    "Regles STRICTES :\n" +
+    "- UNE seule requete SELECT (ou WITH ... SELECT), jamais d'ecriture ni de point-virgule.\n" +
+    "- Uniquement des tables/colonnes existantes, prefixees par le schema (ex: " + SCHEMA + ".exit_orders).\n" +
+    "- OBLIGATOIRE : filtrer les donnees sur un seul client en incluant la condition exacte customer_id = {{CUSTOMER_ID}} dans le WHERE de la table principale (garde le texte {{CUSTOMER_ID}} tel quel, ne mets JAMAIS une vraie valeur).\n" +
+    "- Agrege avec GROUP BY, donne des alias clairs, termine par LIMIT 1000.\n" +
+    "- Choisis le graphique adapte (barres=comparer, courbe/aires=evolution, camembert=parts, tableau=detail). label_column et value_column = alias exacts renvoyes.\n" +
+    "Tables disponibles (schema " + SCHEMA + "):\n" + catalog;
 
   const res = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
-    headers: {
-      "x-api-key": ANTHROPIC_KEY!,
-      "anthropic-version": "2023-06-01",
-      "content-type": "application/json",
-    },
+    headers: { "x-api-key": ANTHROPIC_KEY!, "anthropic-version": "2023-06-01", "content-type": "application/json" },
     body: JSON.stringify({
       model: "claude-opus-4-8",
       max_tokens: 1500,
       system,
-      tools: [{ name: "emit_spec", description: "Renvoie la spécification structurée", input_schema: SPEC_SCHEMA }],
+      tools: [{ name: "emit_spec", description: "Renvoie la specification structuree", input_schema: SPEC_SCHEMA }],
       tool_choice: { type: "tool", name: "emit_spec" },
       messages: [{ role: "user", content: prompt }],
     }),
   });
-  if (!res.ok) throw new Error(`Claude a échoué (${res.status})`);
+  if (!res.ok) throw new Error(`Claude a echoue (${res.status})`);
   const data = await res.json();
   const tool = (data.content || []).find((b: any) => b.type === "tool_use");
-  if (!tool) throw new Error("Réponse Claude inattendue");
+  if (!tool) throw new Error("Reponse Claude inattendue");
   return tool.input;
 }
 
-// Reject anonymous callers — only real logged-in app users may query.
-function isAuthenticatedUser(req: Request): boolean {
-  const auth = req.headers.get("Authorization") || "";
-  const token = auth.replace(/^Bearer\s+/i, "");
+// Decode the Supabase user id (sub) from the verified JWT.
+function userId(req: Request): string | null {
+  const token = (req.headers.get("Authorization") || "").replace(/^Bearer\s+/i, "");
   const part = token.split(".")[1];
-  if (!part) return false;
+  if (!part) return null;
   try {
-    const payload = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
-    return payload.role === "authenticated" && Boolean(payload.sub);
+    const p = JSON.parse(atob(part.replace(/-/g, "+").replace(/_/g, "/")));
+    return p.role === "authenticated" && p.sub ? p.sub : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
-Deno.serve(async (req: Request) => {
-  if (req.method !== "POST") return json({ error: "Méthode non autorisée" }, 405);
-  if (!isAuthenticatedUser(req)) return json({ error: "Non autorisé" }, 401);
+// Read the user's role + assigned client from Supabase (service role, bypasses RLS).
+async function getProfile(uid: string): Promise<{ role: string; customer_id: string | null }> {
+  const res = await fetch(`${SB_URL}/rest/v1/profiles?id=eq.${uid}&select=role,customer_id`, {
+    headers: { apikey: SB_SERVICE!, Authorization: `Bearer ${SB_SERVICE}` },
+  });
+  const rows = await res.json();
+  return rows?.[0] || { role: "client", customer_id: null };
+}
 
-  // Metabase is the core source. Without it, stay in demo mode.
+// Validate + inject the client id, matching the column type (numeric vs text).
+function injectCustomer(sql: string, customerId: string) {
+  if (!sql.includes("{{CUSTOMER_ID}}")) {
+    throw new Error("Filtre client obligatoire manquant dans la requete generee");
+  }
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(customerId)) throw new Error("Identifiant client invalide");
+  const literal = /^\d+$/.test(customerId) ? customerId : `'${customerId}'`;
+  return sql.replaceAll("{{CUSTOMER_ID}}", literal);
+}
+
+Deno.serve(async (req: Request) => {
+  if (req.method !== "POST") return json({ error: "Methode non autorisee" }, 405);
+  const uid = userId(req);
+  if (!uid) return json({ error: "Non autorise" }, 401);
+
   if (!URL_ || !API_KEY) return json({ configured: false });
 
   let body: any = {};
@@ -155,17 +173,47 @@ Deno.serve(async (req: Request) => {
       const res = await fetch(base("/api/database"), { headers: mbHeaders() });
       return json({ configured: true, ok: res.ok, claude: Boolean(ANTHROPIC_KEY), error: res.ok ? undefined : `Metabase ${res.status}` });
     }
-    if (op === "generate") {
-      if (!ANTHROPIC_KEY) return json({ configured: false, error: "Clé Claude manquante" });
-      if (!body.prompt || !String(body.prompt).trim()) return json({ error: "Prompt vide" }, 400);
-      const dbId = await resolveDatabaseId();
-      const tables = await listTables(dbId);
-      const spec = await interpret(String(body.prompt), tables);
-      const sql = assertReadOnly(spec.sql);
-      const rows = await runSql(sql, dbId);
-      return json({ configured: true, spec: { ...spec, sql }, rows });
+
+    const profile = await getProfile(uid);
+
+    if (op === "profile") {
+      return json({ configured: true, role: profile.role, customer_id: profile.customer_id });
     }
-    return json({ error: `Opération inconnue: ${op}` }, 400);
+
+    if (op === "clients") {
+      // Internal users get the full client list; client users get only their own.
+      const id = await dbId(body);
+      if (profile.role !== "internal") {
+        return json({ configured: true, clients: profile.customer_id ? [{ customer_id: profile.customer_id, customer_name: profile.customer_id }] : [] });
+      }
+      const sql = `SELECT customer_id, MAX(customer_name) AS customer_name FROM ${SCHEMA}.exit_orders WHERE customer_id IS NOT NULL GROUP BY customer_id ORDER BY 2 LIMIT 2000`;
+      const rows = await runSql(sql, id);
+      return json({ configured: true, clients: rows });
+    }
+
+    if (op === "generate") {
+      if (!ANTHROPIC_KEY) return json({ configured: false, error: "Cle Claude manquante" });
+      if (!body.prompt || !String(body.prompt).trim()) return json({ error: "Prompt vide" }, 400);
+
+      // Resolve the effective client, enforcing access rules.
+      let customerId: string | null;
+      if (profile.role === "internal") {
+        customerId = body.customerId ? String(body.customerId) : null;
+        if (!customerId) return json({ error: "Choisissez un client" }, 400);
+      } else {
+        customerId = profile.customer_id; // locked, body ignored
+        if (!customerId) return json({ error: "Aucun client rattache a votre compte" }, 403);
+      }
+
+      const id = await dbId(body);
+      const tables = await listTables(id);
+      const spec = await interpret(String(body.prompt), tables);
+      const sql = injectCustomer(assertReadOnly(spec.sql), customerId);
+      const rows = await runSql(sql, id);
+      return json({ configured: true, spec: { ...spec, sql }, rows, customerId });
+    }
+
+    return json({ error: `Operation inconnue: ${op}` }, 400);
   } catch (e) {
     return json({ configured: true, error: (e as Error).message }, 502);
   }

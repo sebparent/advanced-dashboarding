@@ -1,12 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
 import { KpiCards, ChartCard, DataTable } from "../components/Charts";
 import { useAuth } from "../components/AuthProvider";
 import { GEN_STEPS } from "@/lib/genEngine";
-import { generate as metabaseGenerate } from "@/lib/metabase";
+import { generate as metabaseGenerate, getScope, listClients } from "@/lib/metabase";
 import { buildResultSQL } from "@/lib/shape";
 import supabase from "@/lib/supabaseBrowser";
 
@@ -27,10 +27,34 @@ export default function GeneratePage() {
   const [editingScript, setEditingScript] = useState(false);
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [scope, setScope] = useState(null); // { role, customer_id }
+  const [clients, setClients] = useState([]);
+  const [clientId, setClientId] = useState("");
+
+  // Load the signed-in user's scope; internal users also get the client list.
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const s = await getScope();
+      if (cancelled) return;
+      setScope(s);
+      if (s?.role === "internal") {
+        const list = await listClients();
+        if (!cancelled) setClients(list);
+      } else if (s?.customer_id) {
+        setClientId(s.customer_id);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [user]);
+
+  const isInternal = scope?.role === "internal";
+  const clientReady = !isInternal || Boolean(clientId); // internal must pick a client
 
   function runGeneration(text) {
     const p = (text ?? prompt).trim();
-    if (!p) return;
+    if (!p || !clientReady) return;
     setPrompt(p);
     setResult(null);
     setPhase("running");
@@ -41,7 +65,7 @@ export default function GeneratePage() {
     // fall back to the demo route if it isn't configured yet.
     const work = (async () => {
       try {
-        const r = await metabaseGenerate(p);
+        const r = await metabaseGenerate(p, clientId || undefined);
         if (r && r.configured !== false && !r.error && Array.isArray(r.rows)) {
           return buildResultSQL(r.spec, r.rows, "Metabase");
         }
@@ -135,6 +159,25 @@ export default function GeneratePage() {
     <AppShell title="Créer un dashboard" subtitle="Décrivez ce que vous voulez voir, on s'occupe du reste.">
       {phase === "input" && (
         <div className="gen-hero">
+          {isInternal && (
+            <div className="card" style={{ marginBottom: 16, padding: 16 }}>
+              <label className="section-title" style={{ margin: "0 0 8px", display: "block" }}>
+                Client concerné
+              </label>
+              <div className="flex-row" style={{ alignItems: "center", gap: 10 }}>
+                <select className="select" value={clientId} onChange={(e) => setClientId(e.target.value)} style={{ minWidth: 260 }}>
+                  <option value="">— Choisir un client —</option>
+                  {clients.map((c) => (
+                    <option key={c.customer_id} value={c.customer_id}>{c.customer_name || c.customer_id}</option>
+                  ))}
+                </select>
+                <span className="desc" style={{ margin: 0 }}>Le dashboard ne portera que sur ce client.</span>
+              </div>
+            </div>
+          )}
+          {!isInternal && scope?.customer_id && (
+            <p className="desc" style={{ marginBottom: 12 }}>🔒 Vos dashboards portent uniquement sur votre périmètre client.</p>
+          )}
           <div className="prompt-box">
             <textarea
               value={prompt}
@@ -142,10 +185,13 @@ export default function GeneratePage() {
               placeholder="Ex : Je veux voir le nombre de commandes par magasin…"
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runGeneration(); }}
             />
-            <button className="btn btn-primary" onClick={() => runGeneration()} disabled={!prompt.trim()}>
+            <button className="btn btn-primary" onClick={() => runGeneration()} disabled={!prompt.trim() || !clientReady}>
               Générer →
             </button>
           </div>
+          {isInternal && !clientId && (
+            <p className="desc" style={{ marginTop: 8 }}>Choisissez d&apos;abord un client ci-dessus.</p>
+          )}
           <p className="section-title">Exemples de prompts</p>
           <div className="flex-row">
             {EXAMPLES.map((ex) => (

@@ -6,7 +6,7 @@
 // Multi-tenant: every query is scoped to a single client (customer_id), enforced
 // here via the {{CUSTOMER_ID}} placeholder the model must include.
 // Data: analytics schema (order flows) + curated stock tables from
-// logistic_management (stocks, master_items), all client-scoped.
+// logistic_management (stocks = WMS stock, master_items), all client-scoped.
 //
 // Secrets: METABASE_URL, METABASE_API_KEY, ANTHROPIC_API_KEY,
 //          METABASE_DATABASE_ID (=2), METABASE_SCHEMA (=analytics).
@@ -114,7 +114,7 @@ async function interpret(prompt, tables, extra) {
     "- UNE seule requete SELECT (ou WITH ... SELECT), jamais d'ecriture ni de point-virgule.\n" +
     "- Uniquement des tables/colonnes REELLEMENT existantes ci-dessous, prefixees par le schema. N'INVENTE JAMAIS une colonne ou une mesure.\n" +
     "- OBLIGATOIRE : filtrer sur un seul client via la condition exacte customer_id = {{CUSTOMER_ID}} (garde le texte tel quel). Mets ce filtre sur la table qui possede customer_id.\n" +
-    "- STOCK (niveau de stock) : source = logistic_management.stocks (s) ; stock = SUM(s.quantity) en unites (UV) avec s.visible_in_stock = true ; filtre s.customer_id = {{CUSTOMER_ID}}. Par reference produit : JOIN logistic_management.master_items mi ON mi.id = s.master_item_id (reference = mi.item_reference). Par entrepot : JOIN analytics.warehouses w ON w.id = s.warehouse_id (nom = w.name). N'utilise PAS master_items_in_stock.\n" +
+    "- STOCK (niveau de stock) : source = logistic_management.stocks (s) ; stock = SUM(s.quantity) en unites (UV) avec s.visible_in_stock = true ; filtre s.customer_id = {{CUSTOMER_ID}}. C'est le stock WMS. Par reference produit : JOIN logistic_management.master_items mi ON mi.id = s.master_item_id (reference = mi.item_reference). Par entrepot : JOIN analytics.warehouses w ON w.id = s.warehouse_id (nom = w.name). N'utilise PAS master_items_in_stock. Les notions 'reel' et 'previsionnel' ne sont PAS disponibles : precise-le dans intent si demandees.\n" +
     (extra ? extra + "\n" : "") +
     "- Par defaut AGREGE (COUNT(*) pour le nombre de commandes, SUM pour les quantites) avec GROUP BY ; ne liste PAS le detail ligne par ligne SAUF si l'utilisateur demande explicitement une liste.\n" +
     "- Pour un volume de commandes, privilegie total_expected_uv (prevu) plutot que total_actual_uv.\n" +

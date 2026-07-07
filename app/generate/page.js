@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
-import { KpiCards, ChartCard, DataTable } from "../components/Charts";
+import { ChartCard, DataTable, prettyCol } from "../components/Charts";
 import { useAuth } from "../components/AuthProvider";
 import { GEN_STEPS } from "@/lib/genEngine";
 import { generate as metabaseGenerate, getScope, listClients } from "@/lib/metabase";
@@ -32,6 +32,7 @@ export default function GeneratePage() {
   const [clientsLoading, setClientsLoading] = useState(false);
   const [clientId, setClientId] = useState("");
   const [weekDay, setWeekDay] = useState(""); // any day of the chosen week (YYYY-MM-DD)
+  const [genError, setGenError] = useState("");
 
   // Load the signed-in user's scope; internal users also get the client list.
   useEffect(() => {
@@ -53,7 +54,8 @@ export default function GeneratePage() {
   }, [user]);
 
   const isInternal = scope?.role === "internal";
-  const clientReady = !isInternal || Boolean(clientId); // internal must pick a client
+  // Wait until we know the user's scope; internal users must pick a client first.
+  const clientReady = scope ? (scope.role !== "internal" || Boolean(clientId)) : false;
 
   // Monday (ISO week start) of the selected day, as YYYY-MM-DD.
   function mondayOf(dateStr) {
@@ -69,30 +71,32 @@ export default function GeneratePage() {
     if (!p || !clientReady) return;
     setPrompt(p);
     setResult(null);
+    setGenError("");
     setPhase("running");
     setStepIdx(0);
 
     // Kick off the real work and the step animation together.
-    // Try the real path (Supabase Edge Function → Claude → Metabase) first;
-    // fall back to the demo route if it isn't configured yet.
+    // Live path (Supabase Edge Function → Claude → Metabase). Only fall back to
+    // the demo route when the live backend isn't configured; a real error is
+    // surfaced to the user instead of silently showing fake data.
     const work = (async () => {
       try {
         const r = await metabaseGenerate(p, clientId || undefined, mondayOf(weekDay));
-        if (r && r.configured !== false && !r.error && Array.isArray(r.rows)) {
-          // Attach the generated SQL + spec so the "Requête générée" screen and
-          // the save step have them (buildResultSQL only shapes the data).
+        if (r && r.configured === false) {
+          // Not connected to Metabase yet → demo journey.
+          return fetch("/api/generate", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ prompt: p }),
+          }).then((x) => x.json()).catch(() => null);
+        }
+        if (r && r.error) return { __error: r.error };
+        if (r && Array.isArray(r.rows)) {
           return { ...buildResultSQL(r.spec, r.rows, "Metabase"), script: r.spec?.sql || "", spec: r.spec, mode: "prod" };
         }
-      } catch {
-        /* fall through to demo */
+        return { __error: "La génération n'a rien renvoyé. Réessayez." };
+      } catch (e) {
+        return { __error: e?.message || "Une erreur est survenue pendant la génération." };
       }
-      return fetch("/api/generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt: p }),
-      })
-        .then((r) => r.json())
-        .catch(() => null);
     })();
 
     let i = 0;
@@ -102,10 +106,16 @@ export default function GeneratePage() {
       if (i >= GEN_STEPS.length) {
         clearInterval(timer);
         const data = await work;
-        if (data && !data.error) {
+        if (data && data.__error) {
+          setGenError(data.__error);
+          setPhase("input");
+        } else if (data && !data.error) {
+          // Remember the report type the engine suggested for this prompt.
+          data.suggestedType = data.charts?.[0]?.type || "bar";
           setResult(data);
           setTimeout(() => setPhase("script"), 300);
         } else {
+          setGenError((data && data.error) || "La génération a échoué. Réessayez.");
           setPhase("input");
         }
       }
@@ -116,6 +126,26 @@ export default function GeneratePage() {
     navigator.clipboard?.writeText(result.script);
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
+  }
+
+  // Download the report data as CSV (opens directly in Excel; ";" + BOM for FR).
+  function exportCsv() {
+    const cols = result.columns || [];
+    const rows = result.rows || [];
+    const esc = (v) => {
+      const s = String(v ?? "");
+      return /[";\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = cols.map((c) => esc(prettyCol(c))).join(";");
+    const body = rows.map((r) => cols.map((c) => esc(r[c])).join(";")).join("\n");
+    const csv = "﻿" + header + "\n" + body;
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${(result.title || "donnees").replace(/[^\w-]+/g, "_")}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   async function saveDashboard() {
@@ -173,6 +203,7 @@ export default function GeneratePage() {
     <AppShell title="Créer un dashboard" subtitle="Décrivez ce que vous voulez voir, on s'occupe du reste.">
       {phase === "input" && (
         <div className="gen-hero">
+          {genError && <div className="alert alert-error" style={{ marginBottom: 16 }}>{genError}</div>}
           {isInternal && (
             <div className="card" style={{ marginBottom: 16, padding: 16 }}>
               <label className="section-title" style={{ margin: "0 0 8px", display: "block" }}>
@@ -299,8 +330,12 @@ export default function GeneratePage() {
             <div className="flex-row" style={{ marginBottom: 16 }}>
               <span className="status-badge ok">{result.rows.length} lignes</span>
               <span className="status-badge off">{result.columns.length} colonnes</span>
-              <span className="status-badge off">Dimensions : {result.dimensions.join(", ")}</span>
-              <span className="status-badge off">Métriques : {result.metrics.join(", ")}</span>
+              {result.dimensions?.length > 0 && (
+                <span className="status-badge off">Regroupé par : {result.dimensions.map(prettyCol).join(", ")}</span>
+              )}
+              {result.metrics?.length > 0 && (
+                <span className="status-badge off">Mesure : {result.metrics.map(prettyCol).join(", ")}</span>
+              )}
             </div>
             <DataTable columns={result.columns} rows={result.rows} />
             <div className="flex-row mt-16">
@@ -321,24 +356,26 @@ export default function GeneratePage() {
             <div className="flex-row">
               <button className="btn btn-ghost btn-sm" onClick={() => runGeneration(prompt)}>↻ Régénérer</button>
               <button className="btn btn-ghost btn-sm" onClick={() => setPhase("input")}>✎ Modifier le prompt</button>
+              <button className="btn btn-ghost btn-sm" onClick={exportCsv}>⬇ Exporter (Excel/CSV)</button>
               <button className="btn btn-primary btn-sm" onClick={saveDashboard} disabled={saving}>
                 {saving ? "Enregistrement…" : "💾 Sauvegarder le dashboard"}
               </button>
             </div>
           </div>
-          <div className="mt-24"><KpiCards kpis={result.kpis} /></div>
-          <div className="grid chart-grid mt-24">
-            {result.charts.map((c, i) => (
-              <ChartCard
-                key={i}
-                chart={c}
-                editable
-                onTypeChange={(t) => {
-                  const charts = result.charts.map((ch, j) => (j === i ? { ...ch, type: t } : ch));
-                  setResult({ ...result, charts });
-                }}
-              />
-            ))}
+          <p className="section-title mt-24">Type de rapport</p>
+          <p className="desc" style={{ marginTop: -6 }}>
+            On a choisi le format le plus adapté à votre demande. Vous pouvez en changer ci-dessous.
+          </p>
+          <div className="mt-16">
+            <ChartCard
+              chart={result.charts[0]}
+              editable
+              suggestedType={result.suggestedType}
+              onTypeChange={(t) => {
+                const charts = result.charts.map((ch, j) => (j === 0 ? { ...ch, type: t } : ch));
+                setResult({ ...result, charts });
+              }}
+            />
           </div>
         </div>
       )}

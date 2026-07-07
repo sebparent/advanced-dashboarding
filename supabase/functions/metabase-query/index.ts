@@ -117,7 +117,7 @@ async function interpret(prompt: string, tables: any[], extra?: string) {
     (extra ? extra + "\n" : "") +
     "- Par defaut AGREGE (COUNT(*) pour le nombre de commandes, SUM pour les quantites) avec GROUP BY ; ne liste PAS le detail ligne par ligne SAUF si l'utilisateur demande explicitement une liste ou un detail.\n" +
     "- Pour une quantite/volume, privilegie total_expected_uv (quantite PREVUE) plutot que total_actual_uv, car les commandes planifiees non encore expediees ont un realise a 0.\n" +
-    "- Donne des alias clairs, termine par LIMIT 1000.\n" +
+    "- Donne des alias en francais, en snake_case AVEC les mots de liaison pour un affichage lisible (ex: nombre_de_commandes, quantite_prevue, chiffre_d_affaires) ; termine par LIMIT 1000.\n" +
     "- Choisis le graphique adapte (barres=comparer, courbe/aires=evolution, camembert=parts, tableau=detail). label_column et value_column = alias exacts renvoyes.\n" +
     "Tables disponibles (schema " + SCHEMA + "):\n" + catalog;
 

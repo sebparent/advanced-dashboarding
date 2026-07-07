@@ -7,17 +7,36 @@ const GREEN_DARK = "#06A77D";
 const LIME = "#D2F000";
 const PIE_COLORS = ["#1BD292", "#06A77D", "#D2F000", "#ABEDD6", "#2D3142", "#C5FFEB"];
 
-// Show ISO timestamps as a plain date (2026-05-01T00:00:00+02:00 → 01/05/2026).
-function fmtVal(v) {
-  if (typeof v === "string") {
-    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T/);
-    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+const MONTHS_FR = ["Janvier", "Février", "Mars", "Avril", "Mai", "Juin", "Juillet", "Août", "Septembre", "Octobre", "Novembre", "Décembre"];
+
+const isoDate = (v) => (typeof v === "string" ? v.match(/^(\d{4})-(\d{2})-(\d{2})T/) : null);
+const fmtDay = (m) => `${m[3]}/${m[2]}/${m[1]}`;
+const fmtMonth = (m) => `${MONTHS_FR[Number(m[2]) - 1]} ${m[1]}`;
+
+// Column-aware date formatter: only render "Mai 2026" when EVERY date in the
+// column is a first-of-month (i.e. real monthly buckets). Otherwise use
+// DD/MM/YYYY — so weekly dates that land on the 1st aren't mislabelled.
+function columnFormatter(values) {
+  const parsed = values.map(isoDate);
+  const dates = parsed.filter(Boolean);
+  const nonEmpty = values.filter((v) => v !== null && v !== undefined && v !== "");
+  if (dates.length && dates.length === nonEmpty.length) {
+    const monthly = dates.every((m) => m[3] === "01");
+    const fmt = monthly ? fmtMonth : fmtDay;
+    return (v) => { const m = isoDate(v); return m ? fmt(m) : v; };
   }
-  return v;
+  return (v) => v;
+}
+
+// Single value fallback (KPI cards): plain date, no month heuristic.
+function fmtVal(v) {
+  const m = isoDate(v);
+  return m ? fmtDay(m) : v;
 }
 
 export function BarChart({ data, labelKey, valueKey }) {
   const max = Math.max(...data.map((d) => d[valueKey]), 1);
+  const fmtL = columnFormatter(data.map((d) => d[labelKey]));
   return (
     <div style={{ display: "flex", alignItems: "flex-end", gap: 10, height: 200, paddingTop: 10 }}>
       {data.map((d, i) => {
@@ -34,7 +53,7 @@ export function BarChart({ data, labelKey, valueKey }) {
               }}
             />
             <span style={{ fontSize: 11, color: "#6C757D", textAlign: "center", lineHeight: 1.2 }}>
-              {(() => { const s = String(fmtVal(d[labelKey])); return s.length > 10 ? s.slice(0, 9) + "…" : s; })()}
+              {(() => { const s = String(fmtL(d[labelKey])); return s.length > 14 ? s.slice(0, 13) + "…" : s; })()}
             </span>
           </div>
         );
@@ -45,6 +64,7 @@ export function BarChart({ data, labelKey, valueKey }) {
 
 export function LineChart({ data, labelKey, valueKey, area: showArea = true }) {
   const w = 480, h = 200, pad = 28;
+  const fmtL = columnFormatter(data.map((d) => d[labelKey]));
   const max = Math.max(...data.map((d) => d[valueKey]), 1);
   const min = Math.min(...data.map((d) => d[valueKey]), 0);
   const range = max - min || 1;
@@ -68,7 +88,7 @@ export function LineChart({ data, labelKey, valueKey, area: showArea = true }) {
       {pts.map((p, i) => (
         <g key={i}>
           <circle cx={p[0]} cy={p[1]} r="4.5" fill="#fff" stroke={GREEN_DARK} strokeWidth="2.5" />
-          <text x={p[0]} y={h - 8} fontSize="11" fill="#6C757D" textAnchor="middle">{String(fmtVal(data[i][labelKey]))}</text>
+          <text x={p[0]} y={h - 8} fontSize="11" fill="#6C757D" textAnchor="middle">{String(fmtL(data[i][labelKey]))}</text>
         </g>
       ))}
     </svg>
@@ -107,19 +127,34 @@ export function PieChart({ data, innerR = 38 }) {
   );
 }
 
+// "nombre_de_commandes" → "Nombre de commandes"
+export function prettyCol(c) {
+  if (typeof c !== "string") return c;
+  const s = c.replace(/_/g, " ").trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 export function DataTable({ columns, rows }) {
+  const fmts = columns.map((c) => columnFormatter(rows.map((r) => r[c])));
+  // A column is numeric when every non-empty value is a number → right-align it.
+  const numeric = columns.map((c) =>
+    rows.length > 0 && rows.every((r) => r[c] === null || r[c] === "" || typeof r[c] === "number" || (typeof r[c] === "string" && r[c].trim() !== "" && !isNaN(Number(r[c]))))
+    && rows.some((r) => r[c] !== null && r[c] !== "")
+  );
   return (
+    <div className="table-center">
     <div className="table-wrap">
       <table className="data">
         <thead>
-          <tr>{columns.map((c) => <th key={c}>{c}</th>)}</tr>
+          <tr>{columns.map((c, ci) => <th key={c} className={numeric[ci] ? "num" : ""}>{prettyCol(c)}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>{columns.map((c) => <td key={c}>{String(fmtVal(r[c]) ?? "")}</td>)}</tr>
+            <tr key={i}>{columns.map((c, ci) => <td key={c} className={numeric[ci] ? "num" : ""}>{String(fmts[ci](r[c]) ?? "")}</td>)}</tr>
           ))}
         </tbody>
       </table>
+    </div>
     </div>
   );
 }
@@ -270,7 +305,7 @@ function renderChart(type, n) {
   }
 }
 
-export function ChartCard({ chart, editable = false, onTypeChange }) {
+export function ChartCard({ chart, editable = false, onTypeChange, suggestedType }) {
   const [open, setOpen] = useState(false);
   const n = normalize(chart);
   const type = chart.type || "bar";
@@ -302,8 +337,9 @@ export function ChartCard({ chart, editable = false, onTypeChange }) {
                       type="button"
                       className={`fmt-item ${type === t ? "active" : ""}`}
                       onClick={() => choose(t)}
+                      title={t === suggestedType ? "Suggéré pour votre demande" : undefined}
                     >
-                      <span>{TYPE_ICONS[t]}</span> {TYPE_LABELS[t]}
+                      <span>{TYPE_ICONS[t]}</span> {TYPE_LABELS[t]}{t === suggestedType ? " ★" : ""}
                     </button>
                   ))}
                 </div>
@@ -325,7 +361,7 @@ export function KpiCards({ kpis }) {
       {kpis.map((k, i) => (
         <div key={i} className="kpi">
           <div className="label"><span className="ico-badge">{k.ico}</span> {k.label}</div>
-          <div className="value">{k.value}</div>
+          <div className="value">{String(fmtVal(k.value))}</div>
           <span className={`trend ${k.dir}`}>{k.dir === "up" ? "↗" : "↘"} {k.trend}</span>
         </div>
       ))}

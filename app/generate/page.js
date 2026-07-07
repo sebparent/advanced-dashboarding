@@ -332,21 +332,34 @@ export default function GeneratePage() {
           <div className="card">
             <h3>Aperçu des données</h3>
             <p className="desc">Données récupérées via {result.target}{result.mode === "demo" ? " (démonstration)" : " · en direct"}</p>
-            <div className="flex-row" style={{ marginBottom: 16 }}>
-              <span className="status-badge ok">{result.rows.length} lignes</span>
-              <span className="status-badge off">{result.columns.length} colonnes</span>
-              {result.dimensions?.length > 0 && (
-                <span className="status-badge off">Regroupé par : {result.dimensions.map(prettyCol).join(", ")}</span>
-              )}
-              {result.metrics?.length > 0 && (
-                <span className="status-badge off">Mesure : {result.metrics.map(prettyCol).join(", ")}</span>
-              )}
-            </div>
-            <DataTable columns={result.columns} rows={result.rows} />
-            <div className="flex-row mt-16">
-              <button className="btn btn-ghost btn-sm" onClick={() => setPhase("script")}>← Revenir à la requête</button>
-              <button className="btn btn-primary btn-sm" onClick={() => setPhase("dashboard")}>Créer le dashboard →</button>
-            </div>
+            {result.rows.length > 0 ? (
+              <>
+                <div className="flex-row" style={{ marginBottom: 16 }}>
+                  <span className="status-badge ok">{result.rows.length} lignes</span>
+                  <span className="status-badge off">{result.columns.length} colonnes</span>
+                  {result.dimensions?.length > 0 && (
+                    <span className="status-badge off">Regroupé par : {result.dimensions.map(prettyCol).join(", ")}</span>
+                  )}
+                  {result.metrics?.length > 0 && (
+                    <span className="status-badge off">Mesure : {result.metrics.map(prettyCol).join(", ")}</span>
+                  )}
+                </div>
+                <DataTable columns={result.columns} rows={result.rows} />
+                <div className="flex-row mt-16">
+                  <button className="btn btn-ghost btn-sm" onClick={() => setPhase("script")}>← Revenir à la requête</button>
+                  <button className="btn btn-primary btn-sm" onClick={() => setPhase("dashboard")}>Créer le dashboard →</button>
+                </div>
+              </>
+            ) : (
+              <div className="empty-state" style={{ padding: "40px 20px" }}>
+                <div className="big">✅</div>
+                <p style={{ fontSize: 17, color: "var(--slate)", fontWeight: 600 }}>Aucun résultat pour cette demande.</p>
+                <p className="desc" style={{ maxWidth: 460, margin: "6px auto 0" }}>
+                  La requête a bien fonctionné, mais ne renvoie aucune ligne — la réponse à votre demande est donc « rien à signaler ».
+                </p>
+                <button className="btn btn-ghost btn-sm mt-16" onClick={() => setPhase("script")}>← Revenir à la requête</button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -367,21 +380,33 @@ export default function GeneratePage() {
               </button>
             </div>
           </div>
-          <p className="section-title mt-24">Type de rapport</p>
-          <p className="desc" style={{ marginTop: -6 }}>
-            On a choisi le format le plus adapté à votre demande. Vous pouvez en changer ci-dessous.
-          </p>
-          <div className="mt-16">
-            <ChartCard
-              chart={result.charts[0]}
-              editable
-              suggestedType={result.suggestedType}
-              onTypeChange={(t) => {
-                const charts = result.charts.map((ch, j) => (j === 0 ? { ...ch, type: t } : ch));
-                setResult({ ...result, charts });
-              }}
-            />
-          </div>
+          {result.rows.length === 0 ? (
+            <div className="empty-state mt-24" style={{ padding: "40px 20px" }}>
+              <div className="big">✅</div>
+              <p style={{ fontSize: 17, color: "var(--slate)", fontWeight: 600 }}>Aucun résultat pour cette demande.</p>
+              <p className="desc" style={{ maxWidth: 460, margin: "6px auto 0" }}>
+                La requête ne renvoie aucune donnée — rien à signaler pour ce que vous avez demandé.
+              </p>
+            </div>
+          ) : (
+            <>
+              <p className="section-title mt-24">Type de rapport</p>
+              <p className="desc" style={{ marginTop: -6 }}>
+                On a choisi le format le plus adapté à votre demande. Vous pouvez en changer ci-dessous.
+              </p>
+              <div className="mt-16">
+                <ChartCard
+                  chart={result.charts[0]}
+                  editable
+                  suggestedType={result.suggestedType}
+                  onTypeChange={(t) => {
+                    const charts = result.charts.map((ch, j) => (j === 0 ? { ...ch, type: t } : ch));
+                    setResult({ ...result, charts });
+                  }}
+                />
+              </div>
+            </>
+          )}
         </div>
       )}
     </AppShell>

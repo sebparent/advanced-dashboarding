@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
 import { ChartCard, DataTable, prettyCol } from "../components/Charts";
@@ -31,8 +31,10 @@ export default function GeneratePage() {
   const [clients, setClients] = useState([]);
   const [clientsLoading, setClientsLoading] = useState(false);
   const [clientId, setClientId] = useState("");
-  const [weekDay, setWeekDay] = useState(""); // any day of the chosen week (YYYY-MM-DD)
   const [genError, setGenError] = useState("");
+  const [listening, setListening] = useState(false);
+  const [micSupported, setMicSupported] = useState(false);
+  const recognitionRef = useRef(null);
 
   // Load the signed-in user's scope; internal users also get the client list.
   useEffect(() => {
@@ -57,13 +59,30 @@ export default function GeneratePage() {
   // Wait until we know the user's scope; internal users must pick a client first.
   const clientReady = scope ? (scope.role !== "internal" || Boolean(clientId)) : false;
 
-  // Monday (ISO week start) of the selected day, as YYYY-MM-DD.
-  function mondayOf(dateStr) {
-    if (!dateStr) return undefined;
-    const d = new Date(dateStr + "T00:00:00Z");
-    const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
-    d.setUTCDate(d.getUTCDate() - dow);
-    return d.toISOString().slice(0, 10);
+  // ── Voice dictation (Web Speech API, browser-native) ──
+  useEffect(() => {
+    const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
+    if (!SR) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setMicSupported(true);
+    const rec = new SR();
+    rec.lang = "fr-FR";
+    rec.interimResults = false;
+    rec.continuous = false;
+    rec.onresult = (e) => {
+      const text = Array.from(e.results).map((r) => r[0].transcript).join(" ").trim();
+      setPrompt((prev) => (prev ? prev.trim() + " " : "") + text);
+    };
+    rec.onend = () => setListening(false);
+    rec.onerror = () => setListening(false);
+    recognitionRef.current = rec;
+  }, []);
+
+  function toggleDictation() {
+    const rec = recognitionRef.current;
+    if (!rec) return;
+    if (listening) { rec.stop(); setListening(false); return; }
+    try { rec.start(); setListening(true); } catch { /* already started */ }
   }
 
   function runGeneration(text) {
@@ -81,7 +100,7 @@ export default function GeneratePage() {
     // surfaced to the user instead of silently showing fake data.
     const work = (async () => {
       try {
-        const r = await metabaseGenerate(p, clientId || undefined, mondayOf(weekDay));
+        const r = await metabaseGenerate(p, clientId || undefined);
         if (r && r.configured === false) {
           // Not connected to Metabase yet → demo journey.
           return fetch("/api/generate", {
@@ -175,7 +194,7 @@ export default function GeneratePage() {
         user_id: user.id, prompt_id: prow?.id, title: result.title,
         description: result.intent, data_source: result.target,
         superset_dashboard_id: created.superset_dashboard_id || null,
-        layout_config: { kpis: result.kpis, filters: result.filters, script: result.script, scriptType: result.scriptType, columns: result.columns, rows: result.rows },
+        layout_config: { kpis: result.kpis, filters: result.filters, script: result.script, scriptType: result.scriptType, columns: result.columns, rows: result.rows, customerId: clientId || null },
       }).select().single();
 
       if (drow) {
@@ -222,30 +241,6 @@ export default function GeneratePage() {
               </div>
             </div>
           )}
-          <div className="card" style={{ marginBottom: 16, padding: 16 }}>
-            <label className="section-title" style={{ margin: "0 0 8px", display: "block" }}>
-              Semaine (optionnel)
-            </label>
-            <div className="flex-row" style={{ alignItems: "center", gap: 10 }}>
-              <input
-                type="date"
-                className="input"
-                style={{ maxWidth: 200 }}
-                value={weekDay}
-                onChange={(e) => setWeekDay(e.target.value)}
-              />
-              {weekDay ? (
-                <span className="desc" style={{ margin: 0 }}>
-                  Semaine du {mondayOf(weekDay)} (7 jours). Idéal pour « volumes planifiés par jour ».
-                </span>
-              ) : (
-                <span className="desc" style={{ margin: 0 }}>Choisissez un jour : le dashboard couvrira sa semaine entière.</span>
-              )}
-              {weekDay && (
-                <button className="btn btn-ghost btn-sm" onClick={() => setWeekDay("")}>Effacer</button>
-              )}
-            </div>
-          </div>
           {!isInternal && scope?.customer_id && (
             <p className="desc" style={{ marginBottom: 12 }}>🔒 Vos dashboards portent uniquement sur votre périmètre client.</p>
           )}
@@ -253,9 +248,19 @@ export default function GeneratePage() {
             <textarea
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="Ex : Je veux voir le nombre de commandes par magasin…"
+              placeholder="Ex : nombre de commandes par entrepôt, semaine par semaine…"
               onKeyDown={(e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) runGeneration(); }}
             />
+            {micSupported && (
+              <button
+                type="button"
+                className={`btn btn-ghost ${listening ? "mic-on" : ""}`}
+                title={listening ? "Arrêter la dictée" : "Dicter à la voix"}
+                onClick={toggleDictation}
+              >
+                {listening ? "● Écoute…" : "🎤"}
+              </button>
+            )}
             <button className="btn btn-primary" onClick={() => runGeneration()} disabled={!prompt.trim() || !clientReady}>
               Générer →
             </button>

@@ -5,7 +5,8 @@ import { useParams, useRouter } from "next/navigation";
 import AppShell from "../../components/AppShell";
 import { KpiCards, ChartCard } from "../../components/Charts";
 import { useAuth } from "../../components/AuthProvider";
-import { analyzePrompt } from "@/lib/genEngine";
+import { generate as metabaseGenerate } from "@/lib/metabase";
+import { buildResultSQL } from "@/lib/shape";
 import supabase from "@/lib/supabaseBrowser";
 
 export default function DashboardDetail() {
@@ -19,6 +20,7 @@ export default function DashboardDetail() {
   const [notFound, setNotFound] = useState(false);
   const [filter, setFilter] = useState("Tous");
   const [busy, setBusy] = useState(false);
+  const [freshAt, setFreshAt] = useState(null); // when the live data was last refreshed
 
   async function load() {
     const { data: d } = await supabase.from("dashboards").select("*").eq("id", id).single();
@@ -28,30 +30,62 @@ export default function DashboardDetail() {
     setCharts(c || []);
     const { data: r } = await supabase.from("dashboard_runs").select("*").eq("dashboard_id", id).order("created_at", { ascending: false });
     setRuns(r || []);
+    let p = null;
     if (d.prompt_id) {
-      const { data: p } = await supabase.from("prompts").select("*").eq("id", d.prompt_id).single();
-      setPrompt(p);
+      const res = await supabase.from("prompts").select("*").eq("id", d.prompt_id).single();
+      p = res.data; setPrompt(p);
+    }
+    return { d, p };
+  }
+
+  // Re-run the real Metabase query for this dashboard's prompt and persist the
+  // fresh data. Keeps the client scope (customer_id) and week window it was
+  // saved with. Returns true if data was refreshed.
+  async function refresh(dArg, pArg, { silent } = {}) {
+    const d = dArg || dash;
+    const p = pArg || prompt;
+    if (!p || !d) return false;
+    const cfg = d.layout_config || {};
+    if (!silent) setBusy(true);
+    try {
+      const r = await metabaseGenerate(p.prompt_text, cfg.customerId || undefined, cfg.weekStart || undefined);
+      if (!r || r.configured === false || r.error || !Array.isArray(r.rows)) {
+        if (!silent) setBusy(false);
+        return false;
+      }
+      const fresh = buildResultSQL(r.spec, r.rows, "Metabase");
+      await supabase.from("dashboards").update({
+        layout_config: { ...cfg, kpis: fresh.kpis, filters: fresh.filters, script: r.spec?.sql || cfg.script, scriptType: fresh.scriptType, columns: fresh.columns, rows: fresh.rows },
+        updated_at: new Date().toISOString(),
+      }).eq("id", id);
+      await supabase.from("dashboard_charts").delete().eq("dashboard_id", id);
+      await supabase.from("dashboard_charts").insert(
+        fresh.charts.map((c, i) => ({ dashboard_id: id, chart_type: c.type, title: c.title, description: c.desc, data_config: c, visual_config: {}, position: i }))
+      );
+      await supabase.from("dashboard_runs").insert({ dashboard_id: id, prompt_id: p.id, run_status: "success", logs: silent ? "Actualisation à l'ouverture" : "Rafraîchissement manuel" });
+      setFilter("Tous");
+      setFreshAt(new Date());
+      await load();
+      return true;
+    } finally {
+      if (!silent) setBusy(false);
     }
   }
 
-  useEffect(() => { if (user) load(); }, [user, id]);
+  useEffect(() => {
+    if (!user) return;
+    let cancelled = false;
+    (async () => {
+      const res = await load();
+      // Auto-refresh once on open so numbers reflect today's data.
+      if (!cancelled && res?.p) refresh(res.d, res.p, { silent: true });
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user, id]);
 
   async function regenerate() {
-    if (!prompt) return;
-    setBusy(true);
-    const fresh = analyzePrompt(prompt.prompt_text);
-    await supabase.from("dashboards").update({
-      layout_config: { kpis: fresh.kpis, filters: fresh.filters, script: fresh.script, scriptType: fresh.scriptType, columns: fresh.columns, rows: fresh.rows },
-      updated_at: new Date().toISOString(),
-    }).eq("id", id);
-    await supabase.from("dashboard_charts").delete().eq("dashboard_id", id);
-    await supabase.from("dashboard_charts").insert(
-      fresh.charts.map((c, i) => ({ dashboard_id: id, chart_type: c.type, title: c.title, description: c.desc, data_config: c, visual_config: {}, position: i }))
-    );
-    await supabase.from("dashboard_runs").insert({ dashboard_id: id, prompt_id: prompt.id, run_status: "success", logs: "Régénération à la demande" });
-    setBusy(false);
-    setFilter("Tous");
-    load();
+    await refresh();
   }
 
   async function changeType(chart, t) {
@@ -61,7 +95,7 @@ export default function DashboardDetail() {
   }
 
   if (notFound) {
-    return <AppShell title="Dashboard introuvable"><div className="empty-state"><div className="big">🔍</div><p>Ce dashboard n'existe pas ou a été supprimé.</p></div></AppShell>;
+    return <AppShell title="Dashboard introuvable"><div className="empty-state"><div className="big">🔍</div><p>Ce dashboard n&apos;existe pas ou a été supprimé.</p></div></AppShell>;
   }
   if (!dash) {
     return <AppShell title="Chargement…"><div className="center-load"><div className="spinner" /></div></AppShell>;
@@ -84,8 +118,9 @@ export default function DashboardDetail() {
   }
 
   const actions = (
-    <div className="flex-row">
-      <button className="btn btn-ghost btn-sm" onClick={regenerate} disabled={busy || !prompt}>{busy ? "Régénération…" : "↻ Régénérer"}</button>
+    <div className="flex-row" style={{ alignItems: "center" }}>
+      {freshAt && <span className="desc" style={{ margin: 0 }}>à jour · {freshAt.toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" })}</span>}
+      <button className="btn btn-ghost btn-sm" onClick={regenerate} disabled={busy || !prompt}>{busy ? "Rafraîchissement…" : "↻ Rafraîchir"}</button>
       <button className="btn btn-ghost btn-sm" onClick={() => router.push("/generate")}>✎ Nouveau prompt</button>
     </div>
   );
@@ -96,7 +131,7 @@ export default function DashboardDetail() {
         <div className="card" style={{ marginBottom: 20 }}>
           <div className="row-between">
             <div>
-              <p className="section-title" style={{ margin: 0 }}>Prompt d'origine</p>
+              <p className="section-title" style={{ margin: 0 }}>Prompt d&apos;origine</p>
               <p style={{ margin: "6px 0 0", fontSize: 16 }}>« {prompt.prompt_text} »</p>
             </div>
             <span className="tag-src">🎯 {dash.data_source}</span>

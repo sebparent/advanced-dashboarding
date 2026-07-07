@@ -140,6 +140,8 @@ button { font-family: inherit; cursor: pointer; }
 .prompt-box { background: #fff; border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow); padding: 10px 10px 10px 18px; display: flex; gap: 10px; align-items: flex-end; }
 .prompt-box textarea { flex: 1; border: none; resize: none; font-size: 16px; font-family: inherit; padding: 12px 0; background: transparent; min-height: 56px; }
 .prompt-box textarea:focus { outline: none; }
+.mic-on { background: #fdecea !important; color: #c0392b !important; border-color: #f3c9c4 !important; animation: micPulse 1.2s ease-in-out infinite; }
+@keyframes micPulse { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
 .steps { margin: 28px auto 0; max-width: 620px; }
 .step { display: flex; align-items: center; gap: 14px; padding: 13px 16px; border-radius: 14px; margin-bottom: 10px; background: #fff; border: 1px solid var(--border); transition: .2s; }
 .step .dot { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-size: 14px; flex-shrink: 0; background: var(--bg); color: var(--gray); font-weight: 700; }

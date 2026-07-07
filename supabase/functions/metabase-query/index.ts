@@ -143,8 +143,8 @@ Deno.serve(async (req: Request) => {
   if (req.method !== "POST") return json({ error: "Méthode non autorisée" }, 405);
   if (!isAuthenticatedUser(req)) return json({ error: "Non autorisé" }, 401);
 
-  // Secrets not fully set yet → tell the app to stay in demo mode.
-  if (!URL_ || !API_KEY || !ANTHROPIC_KEY) return json({ configured: false });
+  // Metabase is the core source. Without it, stay in demo mode.
+  if (!URL_ || !API_KEY) return json({ configured: false });
 
   let body: any = {};
   try { body = await req.json(); } catch { /* empty */ }
@@ -153,9 +153,10 @@ Deno.serve(async (req: Request) => {
   try {
     if (op === "test") {
       const res = await fetch(base("/api/database"), { headers: mbHeaders() });
-      return json({ configured: true, ok: res.ok, error: res.ok ? undefined : `Metabase ${res.status}` });
+      return json({ configured: true, ok: res.ok, claude: Boolean(ANTHROPIC_KEY), error: res.ok ? undefined : `Metabase ${res.status}` });
     }
     if (op === "generate") {
+      if (!ANTHROPIC_KEY) return json({ configured: false, error: "Clé Claude manquante" });
       if (!body.prompt || !String(body.prompt).trim()) return json({ error: "Prompt vide" }, 400);
       const dbId = await resolveDatabaseId();
       const tables = await listTables(dbId);

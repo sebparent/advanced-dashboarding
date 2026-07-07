@@ -25,8 +25,14 @@ const SCHEMA = Deno.env.get("METABASE_SCHEMA") || "analytics";
 const SB_URL = Deno.env.get("SUPABASE_URL");
 const SB_SERVICE = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY");
 
+const CORS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+};
+
 const json = (body: unknown, status = 200) =>
-  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
+  new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json", ...CORS } });
 
 function mbHeaders() {
   return { "x-api-key": API_KEY!, "Content-Type": "application/json", Accept: "application/json" };
@@ -55,13 +61,19 @@ async function dbId(body: any): Promise<number> {
   return list[0].id;
 }
 
+// Read the catalog straight from information_schema (reliable, unlike the
+// Metabase metadata endpoint which can return empty).
 async function listTables(id: number) {
-  const res = await fetch(base(`/api/database/${id}/metadata?include_hidden=false`), { headers: mbHeaders() });
-  if (!res.ok) throw new Error(`Metadonnees ont echoue (${res.status})`);
-  const data = await res.json();
-  return (data.tables || [])
-    .filter((t: any) => !SCHEMA || (t.schema || "").toLowerCase() === SCHEMA.toLowerCase())
-    .map((t: any) => ({ name: t.name, columns: (t.fields || []).map((f: any) => f.name) }));
+  const rows = await runSql(
+    `SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = '${SCHEMA}' ORDER BY table_name, ordinal_position`,
+    id,
+  );
+  const byTable: Record<string, string[]> = {};
+  for (const r of rows as any[]) {
+    const tn = r.table_name; const cn = r.column_name;
+    (byTable[tn] = byTable[tn] || []).push(cn);
+  }
+  return Object.entries(byTable).map(([name, columns]) => ({ name, columns }));
 }
 
 async function runSql(sql: string, id: number) {
@@ -95,14 +107,17 @@ const SPEC_SCHEMA = {
   required: ["title", "intent", "chart_type", "sql", "label_column", "value_column"],
 };
 
-async function interpret(prompt: string, tables: any[]) {
+async function interpret(prompt: string, tables: any[], extra?: string) {
   const catalog = tables.map((t) => `- ${SCHEMA}.${t.name}: ${(t.columns || []).join(", ")}`).join("\n");
   const system = "Tu traduis une demande en francais en une requete SQL de LECTURE SEULE pour un entrepot interroge via Metabase (Postgres).\n" +
     "Regles STRICTES :\n" +
     "- UNE seule requete SELECT (ou WITH ... SELECT), jamais d'ecriture ni de point-virgule.\n" +
     "- Uniquement des tables/colonnes existantes, prefixees par le schema (ex: " + SCHEMA + ".exit_orders).\n" +
     "- OBLIGATOIRE : filtrer les donnees sur un seul client en incluant la condition exacte customer_id = {{CUSTOMER_ID}} dans le WHERE de la table principale (garde le texte {{CUSTOMER_ID}} tel quel, ne mets JAMAIS une vraie valeur).\n" +
-    "- Agrege avec GROUP BY, donne des alias clairs, termine par LIMIT 1000.\n" +
+    (extra ? extra + "\n" : "") +
+    "- Par defaut AGREGE (COUNT(*) pour le nombre de commandes, SUM pour les quantites) avec GROUP BY ; ne liste PAS le detail ligne par ligne SAUF si l'utilisateur demande explicitement une liste ou un detail.\n" +
+    "- Pour une quantite/volume, privilegie total_expected_uv (quantite PREVUE) plutot que total_actual_uv, car les commandes planifiees non encore expediees ont un realise a 0.\n" +
+    "- Donne des alias clairs, termine par LIMIT 1000.\n" +
     "- Choisis le graphique adapte (barres=comparer, courbe/aires=evolution, camembert=parts, tableau=detail). label_column et value_column = alias exacts renvoyes.\n" +
     "Tables disponibles (schema " + SCHEMA + "):\n" + catalog;
 
@@ -157,7 +172,17 @@ function injectCustomer(sql: string, customerId: string) {
   return sql.replaceAll("{{CUSTOMER_ID}}", literal);
 }
 
+// Validate an ISO date (YYYY-MM-DD) and return it + the day 7 days later.
+function weekRange(weekStart: string): { start: string; end: string } {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(weekStart)) throw new Error("Date de semaine invalide");
+  const d = new Date(weekStart + "T00:00:00Z");
+  if (isNaN(d.getTime())) throw new Error("Date de semaine invalide");
+  const end = new Date(d.getTime() + 7 * 24 * 3600 * 1000);
+  return { start: weekStart, end: end.toISOString().slice(0, 10) };
+}
+
 Deno.serve(async (req: Request) => {
+  if (req.method === "OPTIONS") return new Response("ok", { headers: CORS });
   if (req.method !== "POST") return json({ error: "Methode non autorisee" }, 405);
   const uid = userId(req);
   if (!uid) return json({ error: "Non autorise" }, 401);
@@ -191,6 +216,35 @@ Deno.serve(async (req: Request) => {
       return json({ configured: true, clients: rows });
     }
 
+    if (op === "refresh_clients") {
+      // Internal only: recompute the client list from Metabase and cache it in
+      // Supabase (public.client_directory) so the app's dropdown is instant.
+      if (profile.role !== "internal") return json({ error: "Reserve aux utilisateurs internes" }, 403);
+      const id = await dbId(body);
+      const rows = await runSql(
+        `SELECT customer_id, MAX(customer_name) AS customer_name FROM ${SCHEMA}.exit_orders WHERE customer_id IS NOT NULL GROUP BY customer_id ORDER BY 2 LIMIT 5000`,
+        id,
+      );
+      const payload = (rows as any[]).map((r) => ({ customer_id: r.customer_id, customer_name: r.customer_name, updated_at: new Date().toISOString() }));
+      const up = await fetch(`${SB_URL}/rest/v1/client_directory?on_conflict=customer_id`, {
+        method: "POST",
+        headers: { apikey: SB_SERVICE!, Authorization: `Bearer ${SB_SERVICE}`, "Content-Type": "application/json", Prefer: "resolution=merge-duplicates,return=minimal" },
+        body: JSON.stringify(payload),
+      });
+      if (!up.ok) throw new Error(`Mise en cache a echoue (${up.status}): ${await up.text()}`);
+      return json({ configured: true, cached: payload.length });
+    }
+
+    if (op === "introspect") {
+      // Column names + types for the analytics schema (schema is not sensitive).
+      const id = await dbId(body);
+      const rows = await runSql(
+        `SELECT table_name, column_name, data_type FROM information_schema.columns WHERE table_schema = '${SCHEMA}' ORDER BY table_name, ordinal_position`,
+        id,
+      );
+      return json({ configured: true, columns: rows });
+    }
+
     if (op === "generate") {
       if (!ANTHROPIC_KEY) return json({ configured: false, error: "Cle Claude manquante" });
       if (!body.prompt || !String(body.prompt).trim()) return json({ error: "Prompt vide" }, 400);
@@ -205,12 +259,23 @@ Deno.serve(async (req: Request) => {
         if (!customerId) return json({ error: "Aucun client rattache a votre compte" }, 403);
       }
 
+      // Optional week window: enables a date-picker-driven dashboard.
+      let week: { start: string; end: string } | null = null;
+      let extra: string | undefined;
+      if (body.weekStart) {
+        week = weekRange(String(body.weekStart));
+        extra = "- Une SEMAINE est selectionnee : filtre la date pertinente (date planifiee / prevue) sur l'intervalle [{{WEEK_START}}, {{WEEK_END}}) (>= {{WEEK_START}} AND < {{WEEK_END}}). Garde les marqueurs {{WEEK_START}} et {{WEEK_END}} tels quels. Regroupe par jour de la semaine.";
+      }
+
       const id = await dbId(body);
       const tables = await listTables(id);
-      const spec = await interpret(String(body.prompt), tables);
-      const sql = injectCustomer(assertReadOnly(spec.sql), customerId);
+      const spec = await interpret(String(body.prompt), tables, extra);
+      let sql = injectCustomer(assertReadOnly(spec.sql), customerId);
+      if (week) {
+        sql = sql.replaceAll("{{WEEK_START}}", `'${week.start}'`).replaceAll("{{WEEK_END}}", `'${week.end}'`);
+      }
       const rows = await runSql(sql, id);
-      return json({ configured: true, spec: { ...spec, sql }, rows, customerId });
+      return json({ configured: true, spec: { ...spec, sql }, rows, customerId, week });
     }
 
     return json({ error: `Operation inconnue: ${op}` }, 400);

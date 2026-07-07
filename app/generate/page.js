@@ -11,10 +11,10 @@ import { buildResultSQL } from "@/lib/shape";
 import supabase from "@/lib/supabaseBrowser";
 
 const EXAMPLES = [
-  "Afficher le nombre de commandes par magasin",
-  "Afficher le niveau de stock par magasin",
-  "Comparer les commandes par période",
-  "Identifier les magasins avec le plus faible stock",
+  "Volume des commandes de sortie planifiées par jour pour la semaine sélectionnée (date de livraison prévue)",
+  "Nombre de commandes de sortie par entrepôt",
+  "Évolution des commandes de sortie par semaine",
+  "Répartition des commandes par statut",
 ];
 
 export default function GeneratePage() {
@@ -29,7 +29,9 @@ export default function GeneratePage() {
   const [saving, setSaving] = useState(false);
   const [scope, setScope] = useState(null); // { role, customer_id }
   const [clients, setClients] = useState([]);
+  const [clientsLoading, setClientsLoading] = useState(false);
   const [clientId, setClientId] = useState("");
+  const [weekDay, setWeekDay] = useState(""); // any day of the chosen week (YYYY-MM-DD)
 
   // Load the signed-in user's scope; internal users also get the client list.
   useEffect(() => {
@@ -40,8 +42,9 @@ export default function GeneratePage() {
       if (cancelled) return;
       setScope(s);
       if (s?.role === "internal") {
+        setClientsLoading(true);
         const list = await listClients();
-        if (!cancelled) setClients(list);
+        if (!cancelled) { setClients(list); setClientsLoading(false); }
       } else if (s?.customer_id) {
         setClientId(s.customer_id);
       }
@@ -51,6 +54,15 @@ export default function GeneratePage() {
 
   const isInternal = scope?.role === "internal";
   const clientReady = !isInternal || Boolean(clientId); // internal must pick a client
+
+  // Monday (ISO week start) of the selected day, as YYYY-MM-DD.
+  function mondayOf(dateStr) {
+    if (!dateStr) return undefined;
+    const d = new Date(dateStr + "T00:00:00Z");
+    const dow = (d.getUTCDay() + 6) % 7; // 0 = Monday
+    d.setUTCDate(d.getUTCDate() - dow);
+    return d.toISOString().slice(0, 10);
+  }
 
   function runGeneration(text) {
     const p = (text ?? prompt).trim();
@@ -65,9 +77,11 @@ export default function GeneratePage() {
     // fall back to the demo route if it isn't configured yet.
     const work = (async () => {
       try {
-        const r = await metabaseGenerate(p, clientId || undefined);
+        const r = await metabaseGenerate(p, clientId || undefined, mondayOf(weekDay));
         if (r && r.configured !== false && !r.error && Array.isArray(r.rows)) {
-          return buildResultSQL(r.spec, r.rows, "Metabase");
+          // Attach the generated SQL + spec so the "Requête générée" screen and
+          // the save step have them (buildResultSQL only shapes the data).
+          return { ...buildResultSQL(r.spec, r.rows, "Metabase"), script: r.spec?.sql || "", spec: r.spec, mode: "prod" };
         }
       } catch {
         /* fall through to demo */
@@ -165,16 +179,42 @@ export default function GeneratePage() {
                 Client concerné
               </label>
               <div className="flex-row" style={{ alignItems: "center", gap: 10 }}>
-                <select className="select" value={clientId} onChange={(e) => setClientId(e.target.value)} style={{ minWidth: 260 }}>
-                  <option value="">— Choisir un client —</option>
+                <select className="select" value={clientId} onChange={(e) => setClientId(e.target.value)} style={{ minWidth: 260 }} disabled={clientsLoading}>
+                  <option value="">{clientsLoading ? "Chargement des clients…" : "— Choisir un client —"}</option>
                   {clients.map((c) => (
                     <option key={c.customer_id} value={c.customer_id}>{c.customer_name || c.customer_id}</option>
                   ))}
                 </select>
-                <span className="desc" style={{ margin: 0 }}>Le dashboard ne portera que sur ce client.</span>
+                <span className="desc" style={{ margin: 0 }}>
+                  {clientsLoading ? "Récupération de la liste…" : `${clients.length} clients · le dashboard ne portera que sur celui choisi.`}
+                </span>
               </div>
             </div>
           )}
+          <div className="card" style={{ marginBottom: 16, padding: 16 }}>
+            <label className="section-title" style={{ margin: "0 0 8px", display: "block" }}>
+              Semaine (optionnel)
+            </label>
+            <div className="flex-row" style={{ alignItems: "center", gap: 10 }}>
+              <input
+                type="date"
+                className="input"
+                style={{ maxWidth: 200 }}
+                value={weekDay}
+                onChange={(e) => setWeekDay(e.target.value)}
+              />
+              {weekDay ? (
+                <span className="desc" style={{ margin: 0 }}>
+                  Semaine du {mondayOf(weekDay)} (7 jours). Idéal pour « volumes planifiés par jour ».
+                </span>
+              ) : (
+                <span className="desc" style={{ margin: 0 }}>Choisissez un jour : le dashboard couvrira sa semaine entière.</span>
+              )}
+              {weekDay && (
+                <button className="btn btn-ghost btn-sm" onClick={() => setWeekDay("")}>Effacer</button>
+              )}
+            </div>
+          </div>
           {!isInternal && scope?.customer_id && (
             <p className="desc" style={{ marginBottom: 12 }}>🔒 Vos dashboards portent uniquement sur votre périmètre client.</p>
           )}
@@ -255,7 +295,7 @@ export default function GeneratePage() {
         <div>
           <div className="card">
             <h3>Aperçu des données</h3>
-            <p className="desc">Données récupérées via {result.target} (démonstration)</p>
+            <p className="desc">Données récupérées via {result.target}{result.mode === "demo" ? " (démonstration)" : " · en direct"}</p>
             <div className="flex-row" style={{ marginBottom: 16 }}>
               <span className="status-badge ok">{result.rows.length} lignes</span>
               <span className="status-badge off">{result.columns.length} colonnes</span>

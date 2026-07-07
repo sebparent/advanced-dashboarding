@@ -7,6 +7,15 @@ const GREEN_DARK = "#06A77D";
 const LIME = "#D2F000";
 const PIE_COLORS = ["#1BD292", "#06A77D", "#D2F000", "#ABEDD6", "#2D3142", "#C5FFEB"];
 
+// Show ISO timestamps as a plain date (2026-05-01T00:00:00+02:00 → 01/05/2026).
+function fmtVal(v) {
+  if (typeof v === "string") {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})T/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  }
+  return v;
+}
+
 export function BarChart({ data, labelKey, valueKey }) {
   const max = Math.max(...data.map((d) => d[valueKey]), 1);
   return (
@@ -25,7 +34,7 @@ export function BarChart({ data, labelKey, valueKey }) {
               }}
             />
             <span style={{ fontSize: 11, color: "#6C757D", textAlign: "center", lineHeight: 1.2 }}>
-              {String(d[labelKey]).length > 9 ? String(d[labelKey]).slice(0, 8) + "…" : d[labelKey]}
+              {(() => { const s = String(fmtVal(d[labelKey])); return s.length > 10 ? s.slice(0, 9) + "…" : s; })()}
             </span>
           </div>
         );
@@ -59,7 +68,7 @@ export function LineChart({ data, labelKey, valueKey, area: showArea = true }) {
       {pts.map((p, i) => (
         <g key={i}>
           <circle cx={p[0]} cy={p[1]} r="4.5" fill="#fff" stroke={GREEN_DARK} strokeWidth="2.5" />
-          <text x={p[0]} y={h - 8} fontSize="11" fill="#6C757D" textAnchor="middle">{data[i][labelKey]}</text>
+          <text x={p[0]} y={h - 8} fontSize="11" fill="#6C757D" textAnchor="middle">{String(fmtVal(data[i][labelKey]))}</text>
         </g>
       ))}
     </svg>
@@ -68,12 +77,12 @@ export function LineChart({ data, labelKey, valueKey, area: showArea = true }) {
 
 export function PieChart({ data, innerR = 38 }) {
   const total = data.reduce((s, d) => s + d.value, 0) || 1;
-  let acc = 0;
   const r = 70, cx = 90, cy = 90;
+  // Cumulative sum before each slice, computed without mutating during render.
+  const offsets = data.reduce((arr, d, i) => { arr.push((arr[i] ?? 0) + d.value); return arr; }, [0]);
   const slices = data.map((d, i) => {
-    const start = (acc / total) * 2 * Math.PI;
-    acc += d.value;
-    const end = (acc / total) * 2 * Math.PI;
+    const start = (offsets[i] / total) * 2 * Math.PI;
+    const end = (offsets[i + 1] / total) * 2 * Math.PI;
     const x1 = cx + r * Math.sin(start), y1 = cy - r * Math.cos(start);
     const x2 = cx + r * Math.sin(end), y2 = cy - r * Math.cos(end);
     const large = end - start > Math.PI ? 1 : 0;
@@ -89,7 +98,7 @@ export function PieChart({ data, innerR = 38 }) {
         {slices.map((s, i) => (
           <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8, fontSize: 13 }}>
             <span style={{ width: 12, height: 12, borderRadius: 3, background: s.color }} />
-            <span style={{ flex: 1, color: "#2D3142" }}>{s.label}</span>
+            <span style={{ flex: 1, color: "#2D3142" }}>{String(fmtVal(s.label))}</span>
             <b>{Math.round((s.value / total) * 100)}%</b>
           </div>
         ))}
@@ -107,7 +116,7 @@ export function DataTable({ columns, rows }) {
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>{columns.map((c) => <td key={c}>{String(r[c] ?? "")}</td>)}</tr>
+            <tr key={i}>{columns.map((c) => <td key={c}>{String(fmtVal(r[c]) ?? "")}</td>)}</tr>
           ))}
         </tbody>
       </table>

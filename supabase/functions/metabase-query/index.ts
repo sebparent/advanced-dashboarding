@@ -156,7 +156,15 @@ Deno.serve(async (req) => {
       let sql = injectCustomer(assertReadOnly(spec.sql), customerId);
       if (week) sql = sql.replaceAll("{{WEEK_START}}", `'${week.start}'`).replaceAll("{{WEEK_END}}", `'${week.end}'`);
       const rows = await runSql(sql, id);
-      return json({ configured: true, spec: { ...spec, sql }, rows, customerId, week });
+      // Stock queries: surface the data freshness (last WMS sync) for this client.
+      let freshnessAt = null;
+      if (/logistic_management\.stock/i.test(sql)) {
+        try {
+          const fr = await runSql(`SELECT MAX(last_updated_at) AS at FROM logistic_management.stocks WHERE customer_id = '${customerId}'`, id);
+          freshnessAt = fr[0] && fr[0].at;
+        } catch (_e) { /* optional */ }
+      }
+      return json({ configured: true, spec: { ...spec, sql }, rows, customerId, week, freshnessAt });
     }
     return json({ error: `Operation inconnue: ${op}` }, 400);
   } catch (e) { return json({ configured: true, error: e.message }, 502); }

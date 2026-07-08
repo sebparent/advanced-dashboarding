@@ -59,6 +59,14 @@ export default function GeneratePage() {
   // Wait until we know the user's scope; internal users must pick a client first.
   const clientReady = scope ? (scope.role !== "internal" || Boolean(clientId)) : false;
 
+  // "Stock synchronisé le 26/06/2026 03:00" — shown on stock reports.
+  function freshLabel(v) {
+    if (!v) return null;
+    const d = new Date(v);
+    if (isNaN(d.getTime())) return null;
+    return `Stock synchronisé le ${d.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}`;
+  }
+
   // ── Voice dictation (Web Speech API, browser-native) ──
   useEffect(() => {
     const SR = typeof window !== "undefined" && (window.SpeechRecognition || window.webkitSpeechRecognition);
@@ -110,7 +118,7 @@ export default function GeneratePage() {
         }
         if (r && r.error) return { __error: r.error };
         if (r && Array.isArray(r.rows)) {
-          return { ...buildResultSQL(r.spec, r.rows, "Metabase"), script: r.spec?.sql || "", spec: r.spec, mode: "prod" };
+          return { ...buildResultSQL(r.spec, r.rows, "Metabase"), script: r.spec?.sql || "", spec: r.spec, mode: "prod", freshnessAt: r.freshnessAt || null };
         }
         return { __error: "La génération n'a rien renvoyé. Réessayez." };
       } catch (e) {
@@ -331,7 +339,10 @@ export default function GeneratePage() {
         <div>
           <div className="card">
             <h3>Aperçu des données</h3>
-            <p className="desc">Données récupérées via {result.target}{result.mode === "demo" ? " (démonstration)" : " · en direct"}</p>
+            <p className="desc">
+              Données récupérées via {result.target}{result.mode === "demo" ? " (démonstration)" : " · en direct"}
+              {freshLabel(result.freshnessAt) ? ` · ${freshLabel(result.freshnessAt)}` : ""}
+            </p>
             {result.rows.length > 0 ? (
               <>
                 <div className="flex-row" style={{ marginBottom: 16 }}>
@@ -370,6 +381,9 @@ export default function GeneratePage() {
             <div>
               <h2 style={{ margin: 0 }}>{result.title}</h2>
               <p className="sub">{result.intent}</p>
+              {freshLabel(result.freshnessAt) && (
+                <p className="desc" style={{ margin: "2px 0 0" }}>🕒 {freshLabel(result.freshnessAt)}</p>
+              )}
             </div>
             <div className="flex-row">
               <button className="btn btn-ghost btn-sm" onClick={() => runGeneration(prompt)}>↻ Régénérer</button>

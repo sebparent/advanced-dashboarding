@@ -180,11 +180,11 @@ export function DataTable({ columns, rows }) {
     <div className="table-wrap">
       <table className="data">
         <thead>
-          <tr>{columns.map((c, ci) => <th key={c} className={numeric[ci] ? "num" : ""}>{prettyCol(c)}</th>)}</tr>
+          <tr>{columns.map((c, ci) => <th key={ci} className={numeric[ci] ? "num" : ""}>{prettyCol(c)}</th>)}</tr>
         </thead>
         <tbody>
           {rows.map((r, i) => (
-            <tr key={i}>{columns.map((c, ci) => <td key={c} className={numeric[ci] ? "num" : ""}>{String(fmts[ci](r[c]) ?? "")}</td>)}</tr>
+            <tr key={i}>{columns.map((c, ci) => <td key={ci} className={numeric[ci] ? "num" : ""}>{String(fmts[ci](r[c]) ?? "")}</td>)}</tr>
           ))}
         </tbody>
       </table>
@@ -308,7 +308,12 @@ const TYPE_ORDER = ["bar", "hbar", "line", "area", "pie", "donut", "funnel", "ga
 function normalize(chart) {
   if (chart.labelKey && chart.valueKey && Array.isArray(chart.data)) {
     const points = chart.data.map((d) => ({ label: d[chart.labelKey], value: Number(d[chart.valueKey]) || 0 }));
-    return { points, labelKey: chart.labelKey, valueKey: chart.valueKey, data: chart.data, columns: [chart.labelKey, chart.valueKey], rows: chart.data };
+    // Prefer the full column set for the table view (dedup + all columns);
+    // fall back to label+value when not provided.
+    const cols = Array.isArray(chart.columns) && chart.columns.length
+      ? [...new Set(chart.columns)]
+      : [...new Set([chart.labelKey, chart.valueKey])];
+    return { points, labelKey: chart.labelKey, valueKey: chart.valueKey, data: chart.data, columns: cols, rows: chart.rows || chart.data };
   }
   if (Array.isArray(chart.data) && chart.data[0] && "label" in chart.data[0]) {
     const data = chart.data.map((d) => ({ label: d.label, valeur: d.value }));

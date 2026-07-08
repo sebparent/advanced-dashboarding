@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import AppShell from "../../components/AppShell";
-import { KpiCards, ChartCard } from "../../components/Charts";
+import { ChartCard } from "../../components/Charts";
 import { useAuth } from "../../components/AuthProvider";
 import { generate as metabaseGenerate } from "@/lib/metabase";
 import { buildResultSQL } from "@/lib/shape";
@@ -18,7 +18,6 @@ export default function DashboardDetail() {
   const [prompt, setPrompt] = useState(null);
   const [runs, setRuns] = useState([]);
   const [notFound, setNotFound] = useState(false);
-  const [filter, setFilter] = useState("Tous");
   const [busy, setBusy] = useState(false);
   const [freshAt, setFreshAt] = useState(null); // when the live data was last refreshed
 
@@ -63,7 +62,6 @@ export default function DashboardDetail() {
         fresh.charts.map((c, i) => ({ dashboard_id: id, chart_type: c.type, title: c.title, description: c.desc, data_config: c, visual_config: {}, position: i }))
       );
       await supabase.from("dashboard_runs").insert({ dashboard_id: id, prompt_id: p.id, run_status: "success", logs: silent ? "Actualisation à l'ouverture" : "Rafraîchissement manuel" });
-      setFilter("Tous");
       setFreshAt(new Date());
       await load();
       return true;
@@ -102,20 +100,8 @@ export default function DashboardDetail() {
   }
 
   const cfg = dash.layout_config || {};
-  const filterDim = cfg.filters?.[0];
-  const filterValues = filterDim ? ["Tous", ...new Set((cfg.rows || []).map((r) => r[filterDim]).filter(Boolean))] : [];
-
-  function applyFilter(chart) {
-    const spec = chart.data_config || {};
-    if (filter === "Tous" || !filterDim || spec.type === "pie") return spec;
-    if (Array.isArray(spec.data)) {
-      return { ...spec, data: spec.data.filter((r) => String(r[filterDim]) === String(filter)) };
-    }
-    if (Array.isArray(spec.rows)) {
-      return { ...spec, rows: spec.rows.filter((r) => String(r[filterDim]) === String(filter)) };
-    }
-    return spec;
-  }
+  // The primary report the user chose (position 0). We show ONLY that one.
+  const primary = charts.find((c) => c.position === 0) || charts[0] || null;
 
   const actions = (
     <div className="flex-row" style={{ alignItems: "center" }}>
@@ -139,21 +125,16 @@ export default function DashboardDetail() {
         </div>
       )}
 
-      {cfg.kpis && <KpiCards kpis={cfg.kpis} />}
-
-      {filterValues.length > 1 && (
-        <div className="filter-bar mt-24">
-          <span style={{ alignSelf: "center", fontSize: 14, color: "var(--gray)" }}>Filtrer par {filterDim} :</span>
-          <select className="select" value={filter} onChange={(e) => setFilter(e.target.value)}>
-            {filterValues.map((v) => <option key={v}>{v}</option>)}
-          </select>
-        </div>
+      {freshAt && (
+        <p className="desc" style={{ marginTop: -6 }}>🕒 Données actualisées le {freshAt.toLocaleString("fr-FR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" })}</p>
       )}
 
-      <div className="grid chart-grid mt-16">
-        {charts.map((c) => (
-          <ChartCard key={c.id} chart={applyFilter(c)} editable onTypeChange={(t) => changeType(c, t)} />
-        ))}
+      <div className="mt-16">
+        {primary ? (
+          <ChartCard chart={primary.data_config || {}} editable suggestedType={primary.chart_type} onTypeChange={(t) => changeType(primary, t)} />
+        ) : (
+          <div className="empty-state"><div className="big">🔍</div><p>Aucune donnée à afficher.</p></div>
+        )}
       </div>
 
       {cfg.script && (

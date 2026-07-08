@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import AppShell from "../components/AppShell";
+import { MiniReport } from "../components/Charts";
 import { useAuth } from "../components/AuthProvider";
 import supabase from "@/lib/supabaseBrowser";
 
@@ -17,9 +18,23 @@ export default function DashboardsPage() {
       .from("dashboards")
       .select("*, prompts(prompt_text)")
       .order("updated_at", { ascending: false });
-    setRows(data || []);
+    const list = data || [];
+    // Attach each dashboard's primary chart (position 0) for the card preview.
+    if (list.length) {
+      const ids = list.map((d) => d.id);
+      const { data: charts } = await supabase
+        .from("dashboard_charts")
+        .select("dashboard_id, data_config, chart_type, position")
+        .in("dashboard_id", ids)
+        .eq("position", 0);
+      const byDash = {};
+      (charts || []).forEach((c) => { byDash[c.dashboard_id] = c.data_config; });
+      list.forEach((d) => { d.preview = byDash[d.id] || null; });
+    }
+    setRows(list);
   }
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { if (user) load(); }, [user]);
 
   async function remove(id) {
@@ -52,16 +67,17 @@ export default function DashboardsPage() {
       ) : rows.length === 0 ? (
         <div className="empty-state">
           <div className="big">📊</div>
-          <p>Vous n'avez pas encore de dashboard.</p>
+          <p>Vous n&apos;avez pas encore de dashboard.</p>
           <Link href="/generate" className="btn btn-primary mt-16">Créer mon premier dashboard</Link>
         </div>
       ) : (
         <div className="grid dash-grid">
           {rows.map((d) => (
             <div key={d.id} className="dash-card">
-              <div className="thumb">📈</div>
+              <div className="thumb" style={{ padding: 8, display: "block", height: 140, overflow: "hidden" }}>
+                {d.preview ? <MiniReport chart={d.preview} /> : <div style={{ display: "grid", placeItems: "center", height: "100%", fontSize: 34 }}>📈</div>}
+              </div>
               <h4>{d.title}</h4>
-              <p className="from">« {d.prompts?.prompt_text || d.description} »</p>
               <p className="date">Mis à jour le {new Date(d.updated_at).toLocaleDateString("fr-FR")}</p>
               <div className="row">
                 <button className="btn btn-primary btn-sm" onClick={() => router.push(`/dashboards/${d.id}`)}>Ouvrir</button>

@@ -327,6 +327,40 @@ function normalize(chart) {
   return { points: [], labelKey: "label", valueKey: "value", data: [], columns: [], rows: [] };
 }
 
+// Compact, non-interactive preview of a report (for dashboard cards).
+export function MiniReport({ chart }) {
+  const n = normalize(chart || {});
+  const type = (chart && chart.type) || "bar";
+  if (type === "table") {
+    const cols = n.columns.slice(0, 4);
+    const rows = n.rows.slice(0, 4);
+    const fmts = cols.map((c) => columnFormatter(n.rows.map((r) => r[c])));
+    return (
+      <div style={{ height: 130, overflow: "hidden", pointerEvents: "none", fontSize: 11 }}>
+        <table style={{ width: "100%", borderCollapse: "collapse", tableLayout: "fixed" }}>
+          <thead>
+            <tr>{cols.map((c, i) => (
+              <th key={i} style={{ textAlign: "left", padding: "3px 6px", fontWeight: 700, color: "#2D3142", borderBottom: "1px solid #b8ecd7", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{prettyCol(c)}</th>
+            ))}</tr>
+          </thead>
+          <tbody>
+            {rows.map((r, ri) => (
+              <tr key={ri}>{cols.map((c, i) => (
+                <td key={i} style={{ padding: "3px 6px", color: "#2D3142", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{String(fmts[i](r[c]) ?? "")}</td>
+              ))}</tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    );
+  }
+  return (
+    <div style={{ height: 130, overflow: "hidden", pointerEvents: "none", transform: "scale(0.92)", transformOrigin: "top center" }}>
+      {renderChart(type, n)}
+    </div>
+  );
+}
+
 function renderChart(type, n) {
   switch (type) {
     case "hbar": return <HBarChart points={n.points} />;

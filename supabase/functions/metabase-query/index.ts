@@ -148,9 +148,20 @@ Deno.serve(async (req) => {
       let customerId;
       if (profile.role === "internal") { customerId = body.customerId ? String(body.customerId) : null; if (!customerId) return json({ error: "Choisissez un client" }, 400); }
       else { customerId = profile.customer_id; if (!customerId) return json({ error: "Aucun client rattache a votre compte" }, 403); }
-      let week = null; let extra;
-      if (body.weekStart) { week = weekRange(String(body.weekStart)); extra = "- Une SEMAINE est selectionnee : filtre la date pertinente sur [{{WEEK_START}}, {{WEEK_END}}). Garde les marqueurs tels quels. Regroupe par jour."; }
       const id = await dbId(body);
+      const parts = [];
+      if (body.weekStart) parts.push("- Une SEMAINE est selectionnee : filtre la date pertinente sur [{{WEEK_START}}, {{WEEK_END}}). Garde les marqueurs tels quels. Regroupe par jour.");
+      // Discover the client's custom fields (keys of exit_orders.custom_fields) so
+      // the model can group/filter by them using the user's plain-language names.
+      try {
+        const cf = await runSql(`SELECT DISTINCT jsonb_object_keys(custom_fields) AS k FROM (SELECT custom_fields FROM ${SCHEMA}.exit_orders WHERE customer_id = '${customerId}' AND custom_fields IS NOT NULL ORDER BY created_at DESC LIMIT 3000) t ORDER BY 1`, id);
+        const keys = cf.map((r) => r.k).filter(Boolean);
+        if (keys.length) {
+          parts.push("- CHAMPS PERSONNALISES du client (cles JSON dans exit_orders.custom_fields) : " + keys.join(", ") + ". Pour regrouper ou filtrer sur l'un d'eux, utilise NULLIF(TRIM(exit_orders.custom_fields->>'<cle>'), '') (le TRIM evite les faux doublons dus aux espaces) avec un alias lisible. L'utilisateur les nomme en francais courant : fais correspondre au plus proche (ex: 'type de campagne'->campaign_type, 'nom de campagne'->campaign_name, 'numero de campagne'->campaign_number, 'marque'->marque, 'division'->division, 'axe'->axe, 'signature'->signature). Ignore une dimension demandee qui n'a pas de cle correspondante.");
+        }
+      } catch (_e) { /* custom fields optional */ }
+      const week = body.weekStart ? weekRange(String(body.weekStart)) : null;
+      const extra = parts.length ? parts.join("\n") : undefined;
       const tables = await fullCatalog(id);
       const spec = await interpret(String(body.prompt), tables, extra);
       let sql = injectCustomer(assertReadOnly(spec.sql), customerId);

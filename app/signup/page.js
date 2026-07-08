@@ -31,12 +31,12 @@ export default function SignupPage() {
       return;
     }
     setBusy(false);
-    if (data.session) router.replace("/onboarding");
+    if (data.session) router.replace("/generate");
     else {
       // email confirmation may be required; try direct sign-in
       const { error: e2 } = await supabase.auth.signInWithPassword({ email, password });
       if (e2) setErr("Compte créé. Vérifiez votre e-mail pour confirmer, puis connectez-vous.");
-      else router.replace("/onboarding");
+      else router.replace("/generate");
     }
   }
 

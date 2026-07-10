@@ -198,7 +198,7 @@ table.data tr:last-child td { border-bottom: none; }
 .dash-card h4 { margin: 0 0 4px; font-size: 16px; }
 .dash-card .from { color: var(--gray); font-size: 13px; margin: 0 0 4px; }
 .dash-card .date { color: var(--gray); font-size: 12px; }
-.dash-card .row { display: flex; gap: 8px; margin-top: 14px; }
+.dash-card .row { display: flex; gap: 8px; margin-top: 14px; justify-content: center; flex-wrap: wrap; }
 
 /* onboarding / connectors */
 .connector { display: flex; align-items: center; gap: 16px; padding: 18px; border: 1px solid var(--border); border-radius: 16px; background: #fff; margin-bottom: 14px; }

@@ -95,3 +95,226 @@ body {
   color: var(--muted);
   opacity: 0.75;
 }
+
+/* Wizard — connecteurs */
+.wizard {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: 48px 24px 80px;
+}
+
+.wizard-header {
+  text-align: center;
+  margin-bottom: 32px;
+}
+
+.wizard-logo {
+  width: 140px;
+  height: auto;
+  border-radius: 14px;
+  margin-bottom: 16px;
+}
+
+.wizard-header .tag {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 2px;
+  text-transform: uppercase;
+  color: var(--sf-green-deep);
+}
+
+.wizard-header h1 {
+  margin: 0;
+  font-size: clamp(24px, 4vw, 32px);
+  font-weight: 700;
+  letter-spacing: -0.3px;
+}
+
+.wizard-header .lead {
+  margin: 12px auto 0;
+  max-width: 520px;
+  color: var(--muted);
+  line-height: 1.6;
+}
+
+.steps {
+  display: flex;
+  justify-content: center;
+  gap: 24px;
+  list-style: none;
+  padding: 0;
+  margin: 0 0 28px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.steps li.active {
+  color: var(--sf-green-deep);
+}
+
+.steps li.done {
+  color: var(--ink);
+}
+
+.card {
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  box-shadow: 0 2px 8px rgba(10, 10, 10, 0.06);
+  padding: 32px;
+}
+
+.card.wide {
+  padding: 32px;
+}
+
+.card h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.card .muted {
+  margin: 0 0 20px;
+  color: var(--muted);
+}
+
+.options {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 24px;
+}
+
+.option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  cursor: pointer;
+  font-weight: 500;
+}
+
+.option input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--sf-green);
+}
+
+.btn-primary {
+  background: var(--sf-green);
+  color: var(--ink);
+  border: none;
+  border-radius: 999px;
+  padding: 12px 24px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.btn-primary:hover {
+  background: var(--sf-green-deep);
+}
+
+.btn-primary:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-secondary {
+  background: #fff;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 12px 24px;
+  font-weight: 600;
+  cursor: pointer;
+  margin-right: 12px;
+}
+
+.dropzone {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px;
+  border: 2px dashed var(--line);
+  border-radius: 14px;
+  color: var(--sf-green-deep);
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 20px;
+}
+
+.dropzone:hover {
+  background: var(--sf-green-tint);
+}
+
+.error {
+  color: #c0392b;
+  font-weight: 500;
+  margin-bottom: 16px;
+}
+
+.mapping-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-bottom: 24px;
+  font-size: 14px;
+}
+
+.mapping-table th {
+  text-align: left;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mapping-table td {
+  padding: 8px 10px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mapping-table select,
+.mapping-table input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-size: 14px;
+}
+
+.custom-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-family: monospace;
+}
+
+.custom-field input {
+  font-family: monospace;
+}
+
+.actions {
+  display: flex;
+  gap: 12px;
+}
+
+.output {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line);
+}
+
+.output pre {
+  background: var(--bg-tint);
+  border-radius: 12px;
+  padding: 16px;
+  overflow-x: auto;
+  font-size: 13px;
+  margin-bottom: 16px;
+}
